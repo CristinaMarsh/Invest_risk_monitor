@@ -556,18 +556,33 @@ def fetch_cn_etf_daily_eastmoney(symbol: str) -> pd.DataFrame:
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
     }
-    response = requests.get(
-        EASTMONEY_KLINE_URL,
-        params=params,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
-            ),
-            "Referer": "https://quote.eastmoney.com/",
-        },
-        timeout=TIMEOUT,
-    )
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+        ),
+        "Referer": "https://quote.eastmoney.com/",
+    }
+    last_error: Exception | None = None
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                EASTMONEY_KLINE_URL,
+                params=params,
+                headers=headers,
+                timeout=TIMEOUT,
+            )
+            if response.status_code < 500:
+                break
+            last_error = RuntimeError(f"EastMoney HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+
+    if response is None:
+        raise RuntimeError(f"EastMoney request failed for {symbol}: {last_error}")
     if response.status_code >= 400:
         raise RuntimeError(f"EastMoney HTTP {response.status_code} for {symbol}")
     try:
