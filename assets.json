@@ -33,20 +33,92 @@
       "enabled": true
     },
     {
-      "symbol": "161725",
-      "type": "CN_FUND",
-      "name_zh": "招商中证白酒指数(LOF)A",
-      "name_en": "China Merchants CSI Baijiu Index Fund",
-      "note": "中国开放式基金示例，默认关闭；需要监控时把 enabled 改为 true。",
-      "enabled": false
+      "symbol": "AIQ",
+      "type": "US_ETF",
+      "name_zh": "Global X 人工智能与科技ETF",
+      "name_en": "Global X Artificial Intelligence & Technology ETF",
+      "note": "美股AI主题ETF，覆盖人工智能软件、云、数据中心和AI硬件受益公司。",
+      "enabled": true
     },
     {
-      "symbol": "510300",
+      "symbol": "BOTZ",
+      "type": "US_ETF",
+      "name_zh": "Global X 机器人与人工智能ETF",
+      "name_en": "Global X Robotics & Artificial Intelligence ETF",
+      "note": "美股机器人和自动化主题ETF，适合观察机器人产业链和AI应用扩散。",
+      "enabled": true
+    },
+    {
+      "symbol": "SMH",
+      "type": "US_ETF",
+      "name_zh": "VanEck 半导体ETF",
+      "name_en": "VanEck Semiconductor ETF",
+      "note": "美股半导体ETF，覆盖英伟达、台积电、AMD、博通、美光等芯片产业链公司。",
+      "enabled": true
+    },
+    {
+      "symbol": "SCHD",
+      "type": "US_ETF",
+      "name_zh": "Schwab 美国红利股票ETF",
+      "name_en": "Schwab U.S. Dividend Equity ETF",
+      "note": "美股红利ETF，用来观察高股息资产相对成长科技的防御性表现。",
+      "enabled": true
+    },
+    {
+      "symbol": "LIT",
+      "type": "US_ETF",
+      "name_zh": "Global X 锂电池科技ETF",
+      "name_en": "Global X Lithium & Battery Tech ETF",
+      "note": "美股电池和锂资源主题ETF，作为海外储能和电池产业链观察资产。",
+      "enabled": true
+    },
+    {
+      "symbol": "515070",
       "type": "CN_ETF",
-      "name_zh": "华泰柏瑞沪深300ETF",
-      "name_en": "CSI 300 ETF",
-      "note": "中国 ETF 示例，默认关闭；需要监控时把 enabled 改为 true。",
-      "enabled": false
+      "name_zh": "人工智能ETF华夏",
+      "name_en": "ChinaAMC CSI Artificial Intelligence Theme ETF",
+      "note": "中国人工智能主题ETF，观察A股AI应用、算力和软件产业链风险偏好。",
+      "enabled": true
+    },
+    {
+      "symbol": "512480",
+      "type": "CN_ETF",
+      "name_zh": "半导体ETF国联安",
+      "name_en": "GTJA-Allianz CSI Semiconductor ETF",
+      "note": "中国半导体ETF，跟踪中证全指半导体产品与设备指数。",
+      "enabled": true
+    },
+    {
+      "symbol": "510880",
+      "type": "CN_ETF",
+      "name_zh": "红利ETF华泰柏瑞",
+      "name_en": "Huatai-PineBridge SSE Dividend ETF",
+      "note": "中国红利ETF，用来观察高股息资产和科技成长资产之间的风格切换。",
+      "enabled": true
+    },
+    {
+      "symbol": "515880",
+      "type": "CN_ETF",
+      "name_zh": "通信ETF国泰",
+      "name_en": "Guotai CSI All Share Communication ETF",
+      "note": "中国通信ETF，CPO/光模块通常属于通信和算力基础设施链条，不是纯CPO ETF。",
+      "enabled": true
+    },
+    {
+      "symbol": "159770",
+      "type": "CN_ETF",
+      "name_zh": "机器人ETF天弘",
+      "name_en": "Tianhong CSI Robot ETF",
+      "note": "中国机器人ETF，观察工业自动化、人形机器人和智能制造方向。",
+      "enabled": true
+    },
+    {
+      "symbol": "159566",
+      "type": "CN_ETF",
+      "name_zh": "储能电池ETF易方达",
+      "name_en": "E Fund Energy Storage Battery ETF",
+      "note": "中国储能电池ETF，观察电池、储能和新能源产业链。",
+      "enabled": true
     }
   ]
 }

@@ -25,7 +25,7 @@ TELEGRAM_SAFE_LIMIT = 3900
 STALE_PRICE_DAYS = 5
 DEFAULT_TICKERS = "MU,SNDK,WDC,STX"
 DEFAULT_ASSET_CONFIG = "assets.json"
-SUPPORTED_ASSET_TYPES = {"US_STOCK", "CN_FUND", "CN_ETF"}
+SUPPORTED_ASSET_TYPES = {"US_STOCK", "US_ETF", "CN_FUND", "CN_ETF"}
 
 
 @dataclass
@@ -202,9 +202,14 @@ def load_assets(config_path: str | None = None) -> list[Asset]:
 def asset_type_label(asset_type: str) -> str:
     return {
         "US_STOCK": "美股",
+        "US_ETF": "美股ETF",
         "CN_FUND": "中国基金",
         "CN_ETF": "中国ETF",
     }.get(asset_type, asset_type)
+
+
+def uses_alpha_vantage(asset_type: str) -> bool:
+    return asset_type in {"US_STOCK", "US_ETF"}
 
 
 def is_safe_http_url(value: str) -> bool:
@@ -382,9 +387,11 @@ def fetch_cn_etf_daily(symbol: str) -> pd.DataFrame:
 
 
 def fetch_asset_daily(asset: Asset, api_key: str | None) -> pd.DataFrame:
-    if asset.asset_type == "US_STOCK":
+    if uses_alpha_vantage(asset.asset_type):
         if not api_key:
-            raise RuntimeError("ALPHAVANTAGE_API_KEY is required for US_STOCK assets")
+            raise RuntimeError(
+                f"ALPHAVANTAGE_API_KEY is required for {asset.asset_type} assets"
+            )
         return fetch_daily(asset.symbol, api_key)
     if asset.asset_type == "CN_FUND":
         return fetch_cn_fund_daily(asset.symbol)
@@ -735,7 +742,7 @@ def build_report(
         [
             "<b>解释</b>",
             "概率来自透明规则评分和 Softmax 转换，尚未经过个人持仓约束和历史概率校准。",
-            "基金/ETF 暂沿用同一价格趋势框架；新闻情绪仅对支持的美股启用。",
+            "基金/ETF 暂沿用同一价格趋势框架；新闻情绪仅对支持的美股和美股ETF启用。",
             "用于风险监测，不构成自动交易指令。",
         ]
     )
@@ -827,7 +834,7 @@ def main() -> int:
     telegram_chat_id = env_required("TELEGRAM_CHAT_ID")
 
     assets = load_assets()
-    needs_alpha = any(asset.asset_type == "US_STOCK" for asset in assets)
+    needs_alpha = any(uses_alpha_vantage(asset.asset_type) for asset in assets)
     api_key = env_required("ALPHAVANTAGE_API_KEY") if needs_alpha else os.getenv(
         "ALPHAVANTAGE_API_KEY", ""
     ).strip()
@@ -836,7 +843,7 @@ def main() -> int:
     news_symbols = [
         asset.news_symbol or asset.symbol
         for asset in assets
-        if asset.asset_type == "US_STOCK"
+        if uses_alpha_vantage(asset.asset_type)
     ]
     try:
         if news_symbols:
@@ -856,8 +863,10 @@ def main() -> int:
 
     signals: list[Signal] = []
     frames: dict[str, pd.DataFrame] = {}
-    us_stock_symbols = {asset.symbol for asset in assets if asset.asset_type == "US_STOCK"}
-    fetched_us_stocks = 0
+    alpha_symbols = {
+        asset.symbol for asset in assets if uses_alpha_vantage(asset.asset_type)
+    }
+    fetched_alpha_assets = 0
 
     for asset in assets:
         try:
@@ -879,9 +888,11 @@ def main() -> int:
                 )
             )
         # Avoid bursting the free API tier.
-        if asset.asset_type == "US_STOCK":
-            fetched_us_stocks += 1
-        if fetched_us_stocks < len(us_stock_symbols) and asset.asset_type == "US_STOCK":
+        if uses_alpha_vantage(asset.asset_type):
+            fetched_alpha_assets += 1
+        if fetched_alpha_assets < len(alpha_symbols) and uses_alpha_vantage(
+            asset.asset_type
+        ):
             time.sleep(13)
 
     if not signals:

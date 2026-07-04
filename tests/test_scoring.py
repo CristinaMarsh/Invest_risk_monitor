@@ -131,6 +131,7 @@ def test_load_assets_reads_enabled_config(tmp_path):
             {
                 "assets": [
                     {"symbol": "MU", "type": "US_STOCK", "enabled": True},
+                    {"symbol": "SMH", "type": "US_ETF", "enabled": True},
                     {"symbol": "161725", "type": "CN_FUND", "enabled": False},
                 ]
             }
@@ -140,8 +141,9 @@ def test_load_assets_reads_enabled_config(tmp_path):
 
     assets = monitor.load_assets(str(config))
 
-    assert [asset.symbol for asset in assets] == ["MU"]
+    assert [asset.symbol for asset in assets] == ["MU", "SMH"]
     assert assets[0].asset_type == "US_STOCK"
+    assert assets[1].asset_type == "US_ETF"
 
 
 def test_cn_fund_daily_normalizes_akshare_nav(monkeypatch):

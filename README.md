@@ -11,8 +11,8 @@
 ## 数据流
 
 1. `assets.json` 定义监控资产、资产类型、中文名、英文名和给非专业用户看的备注。
-2. 美股价格来自 Alpha Vantage `TIME_SERIES_DAILY`。
-3. 美股新闻情绪来自 Alpha Vantage `NEWS_SENTIMENT`。
+2. 美股和美股 ETF 价格来自 Alpha Vantage `TIME_SERIES_DAILY`。
+3. 美股和美股 ETF 新闻情绪来自 Alpha Vantage `NEWS_SENTIMENT`。
 4. 中国开放式基金和中国 ETF 价格来自 akshare。
 5. `monitor.py` 计算三分类概率，生成 Telegram HTML 报告。
 6. GitHub Actions 每周运行一次，并把快照写入 `history/`。
@@ -26,12 +26,12 @@
 - `WDC`：西部数据，Western Digital
 - `STX`：希捷科技，Seagate Technology
 
-`assets.json` 中还放了两个默认关闭的示例：
+同时默认启用一组美股和中国 ETF，用于覆盖 AI、人工智能、半导体、红利、CPO/通信、机器人和储能电池方向：
 
-- `161725`：招商中证白酒指数(LOF)A，中国开放式基金示例
-- `510300`：华泰柏瑞沪深300ETF，中国 ETF 示例
+- 美股 ETF：`AIQ`、`BOTZ`、`SMH`、`SCHD`、`LIT`
+- 中国 ETF：`515070`、`512480`、`510880`、`515880`、`159770`、`159566`
 
-需要监控基金或 ETF 时，把对应条目的 `enabled` 改为 `true`，或复制一条后替换成自己的基金代码。
+需要删减监控范围时，把对应条目的 `enabled` 改为 `false`。需要新增基金或 ETF 时，复制一条后替换成自己的代码。
 
 ## 本地运行
 
@@ -48,7 +48,7 @@ $env:ASSET_CONFIG="assets.json"
 python monitor.py
 ```
 
-只监控美股时必须配置 `ALPHAVANTAGE_API_KEY`。如果只监控中国基金或 ETF，可以不使用 Alpha Vantage，但 GitHub Actions 默认仍会校验该 Secret。
+只监控美股或美股 ETF 时必须配置 `ALPHAVANTAGE_API_KEY`。如果只监控中国基金或 ETF，可以不使用 Alpha Vantage，但 GitHub Actions 默认仍会校验该 Secret。
 
 ## GitHub Actions 部署
 
@@ -91,6 +91,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 支持的 `type`：
 
 - `US_STOCK`：美股，价格和新闻情绪来自 Alpha Vantage
+- `US_ETF`：美股 ETF，价格和新闻情绪来自 Alpha Vantage
 - `CN_FUND`：中国开放式基金，净值来自 akshare
 - `CN_ETF`：中国 ETF，日行情来自 akshare
 
