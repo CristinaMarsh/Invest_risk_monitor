@@ -1,0 +1,52 @@
+{
+  "assets": [
+    {
+      "symbol": "MU",
+      "type": "US_STOCK",
+      "name_zh": "美光科技",
+      "name_en": "Micron Technology",
+      "note": "存储芯片厂商，主要看 DRAM/NAND 价格周期、AI 服务器需求和库存变化。",
+      "enabled": true
+    },
+    {
+      "symbol": "SNDK",
+      "type": "US_STOCK",
+      "name_zh": "闪迪",
+      "name_en": "SanDisk",
+      "note": "NAND 闪存和存储产品公司，和存储周期、消费电子及企业存储需求相关。",
+      "enabled": true
+    },
+    {
+      "symbol": "WDC",
+      "type": "US_STOCK",
+      "name_zh": "西部数据",
+      "name_en": "Western Digital",
+      "note": "硬盘和数据存储公司，主要看云厂商资本开支、硬盘需求和存储价格周期。",
+      "enabled": true
+    },
+    {
+      "symbol": "STX",
+      "type": "US_STOCK",
+      "name_zh": "希捷科技",
+      "name_en": "Seagate Technology",
+      "note": "硬盘和企业级存储公司，主要看数据中心需求、近线硬盘出货和利润率变化。",
+      "enabled": true
+    },
+    {
+      "symbol": "161725",
+      "type": "CN_FUND",
+      "name_zh": "招商中证白酒指数(LOF)A",
+      "name_en": "China Merchants CSI Baijiu Index Fund",
+      "note": "中国开放式基金示例，默认关闭；需要监控时把 enabled 改为 true。",
+      "enabled": false
+    },
+    {
+      "symbol": "510300",
+      "type": "CN_ETF",
+      "name_zh": "华泰柏瑞沪深300ETF",
+      "name_en": "CSI 300 ETF",
+      "note": "中国 ETF 示例，默认关闭；需要监控时把 enabled 改为 true。",
+      "enabled": false
+    }
+  ]
+}

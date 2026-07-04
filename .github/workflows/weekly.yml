@@ -1,0 +1,71 @@
+name: Weekly memory-stock risk monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 8 * * 1"
+      timezone: "America/Los_Angeles"
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          python -m py_compile monitor.py tests/test_scoring.py scripts/test_telegram.py
+          python -m pytest -q
+
+      - name: Validate required secrets
+        env:
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          test -n "$ALPHAVANTAGE_API_KEY" || (echo "Missing ALPHAVANTAGE_API_KEY secret" && exit 1)
+          test -n "$TELEGRAM_BOT_TOKEN" || (echo "Missing TELEGRAM_BOT_TOKEN secret" && exit 1)
+          test -n "$TELEGRAM_CHAT_ID" || (echo "Missing TELEGRAM_CHAT_ID secret" && exit 1)
+
+      - name: Run monitor and send Telegram report
+        env:
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ASSET_CONFIG: "assets.json"
+          OUTPUT_DIR: "history"
+        run: |
+          set +e
+          python monitor.py
+          code=$?
+          echo "$code" > monitor_exit_code.txt
+          exit 0
+
+      - name: Upload monitoring history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-history
+          path: history
+          if-no-files-found: ignore
+
+      - name: Fail if monitor failed
+        if: always()
+        run: |
+          code="$(cat monitor_exit_code.txt 2>/dev/null || echo 1)"
+          exit "$code"
