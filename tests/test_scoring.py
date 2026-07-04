@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+import evaluate_predictions
 import monitor
 from monitor import Signal, score_signal
 
@@ -28,9 +29,49 @@ def make_signal(**overrides):
     return Signal(**base)
 
 
+def make_price_frame(end="2026-07-02", periods=100):
+    dates = pd.bdate_range(end=end, periods=periods)
+    close = pd.Series(np.linspace(90.0, 120.0, len(dates)), index=dates)
+    return pd.DataFrame(
+        {
+            "open": close * 0.995,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": np.linspace(1_000_000, 1_300_000, len(dates)),
+        },
+        index=dates,
+    )
+
+
 def test_probabilities_sum_to_one():
-    result = score_signal(make_signal(), breadth=0.5)
+    result = score_signal(make_signal(), portfolio_breadth=0.5)
     assert abs(sum(result.probabilities.values()) - 1.0) < 1e-9
+
+
+def test_score_signal_records_logits_and_contributions():
+    result = score_signal(make_signal(), portfolio_breadth=0.5)
+
+    assert result.raw_logits
+    assert result.score_components["portfolio_breadth"] == 0.5
+    assert set(result.indicator_contributions) >= {
+        "ma20_below_average",
+        "news_sentiment_risk",
+        "portfolio_breadth_risk",
+        "keep_intercept",
+    }
+
+    sell_sum = sum(
+        row["sell_all"] for row in result.indicator_contributions.values()
+    )
+    reduce_sum = sum(
+        row["reduce_on_rebound"] for row in result.indicator_contributions.values()
+    )
+    keep_sum = sum(row["keep"] for row in result.indicator_contributions.values())
+
+    assert abs(sell_sum - result.raw_logits[monitor.LABEL_SELL_ALL]) < 1e-9
+    assert abs(reduce_sum - result.raw_logits[monitor.LABEL_REDUCE_ON_REBOUND]) < 1e-9
+    assert abs(keep_sum - result.raw_logits[monitor.LABEL_KEEP]) < 1e-9
 
 
 def test_oversold_case_prefers_waiting_over_holding():
@@ -46,9 +87,9 @@ def test_oversold_case_prefers_waiting_over_holding():
             news_score=-0.05,
             negative_news_ratio=0.25,
         ),
-        breadth=0.25,
+        portfolio_breadth=0.25,
     )
-    assert result.probabilities["等待回弹后卖出或减仓"] > result.probabilities["留下"]
+    assert result.probabilities["??????????"] > result.probabilities["??"]
 
 
 def test_positive_case_prefers_holding():
@@ -65,9 +106,9 @@ def test_positive_case_prefers_holding():
             news_score=0.25,
             negative_news_ratio=0.05,
         ),
-        breadth=0.75,
+        portfolio_breadth=0.75,
     )
-    assert result.recommendation == "留下"
+    assert result.recommendation == "??"
 
 
 def test_empty_news_feed_uses_neutral_scores(monkeypatch):
@@ -88,14 +129,14 @@ def test_long_telegram_line_is_split():
 
 
 def test_nonfinite_signal_does_not_create_nan_probabilities():
-    result = score_signal(make_signal(ma20_gap=float("nan")), breadth=0.5)
+    result = score_signal(make_signal(ma20_gap=float("nan")), portfolio_breadth=0.5)
 
     assert all(math.isfinite(value) for value in result.probabilities.values())
     assert abs(sum(result.probabilities.values()) - 1.0) < 1e-9
 
 
 def test_report_does_not_link_invalid_news_url():
-    signal = score_signal(make_signal(), breadth=0.5)
+    signal = score_signal(make_signal(), portfolio_breadth=0.5)
 
     report, _ = monitor.build_report(
         [signal],
@@ -110,18 +151,20 @@ def test_report_does_not_link_invalid_news_url():
 def test_report_includes_asset_translation_and_note():
     signal = score_signal(
         make_signal(
-            name_zh="美光科技",
+            name_zh="????",
             name_en="Micron Technology",
-            note="存储芯片厂商，主要看 DRAM/NAND 周期。",
+            note="??????,??? DRAM/NAND ???",
             price_as_of="2026-07-02",
         ),
-        breadth=0.5,
+        portfolio_breadth=0.5,
     )
 
     report, _ = monitor.build_report([signal], [], "2026-07-02")
 
-    assert "美光科技 (TEST, Micron Technology)" in report
-    assert "注：存储芯片厂商" in report
+    assert "???? (TEST, Micron Technology)" in report
+    assert "?:??????" in report
+    assert "????????" in report
+    assert "?????????" in report
 
 
 def test_risk_alert_includes_cvar_when_history_is_sufficient():
@@ -139,10 +182,10 @@ def test_risk_alert_includes_cvar_when_history_is_sufficient():
         },
         index=dates,
     )
-    asset = monitor.Asset(symbol="512480", asset_type="CN_ETF", name_zh="半导体ETF")
+    asset = monitor.Asset(symbol="512480", asset_type="CN_ETF", name_zh="???ETF")
     signal = score_signal(
         monitor.calculate_signal("512480", frame, monitor.neutral_news_summary(["512480"])["512480"], asset),
-        breadth=0.5,
+        portfolio_breadth=0.5,
     )
 
     alert = monitor.calculate_risk_alert(signal, frame)
@@ -150,7 +193,7 @@ def test_risk_alert_includes_cvar_when_history_is_sufficient():
     assert alert.cvar_95_1d is not None
     assert alert.cvar_95_5d is not None
     assert alert.cvar_95_1d < 0
-    assert alert.level in {"低", "中", "中高", "高"}
+    assert alert.level in {"?", "?", "??", "?"}
 
 
 def test_report_includes_cn_risk_alert_and_key_links():
@@ -158,19 +201,19 @@ def test_report_includes_cn_risk_alert_and_key_links():
         make_signal(
             ticker="512480",
             asset_type="CN_ETF",
-            name_zh="半导体ETF国联安",
+            name_zh="???ETF???",
             name_en="GTJA-Allianz CSI Semiconductor ETF",
             ret_5d=-0.06,
             ret_20d=-0.08,
             ma20_gap=-0.04,
             price_as_of="2026-07-02",
         ),
-        breadth=0.5,
+        portfolio_breadth=0.5,
     )
     alert = monitor.RiskAlert(
         ticker="512480",
-        level="中高",
-        direction="转弱",
+        level="??",
+        direction="??",
         score=0.62,
         current_drawdown_60d=-0.12,
         annual_vol_20d=0.32,
@@ -183,14 +226,14 @@ def test_report_includes_cn_risk_alert_and_key_links():
         cvar_95_5d=-0.10,
         consecutive_down_days=3,
         sample_days=160,
-        warnings=["近5日跌幅进入历史尾部区间"],
+        warnings=["?5???????????"],
     )
     stories = [
         monitor.MarketStory(
             symbol="512480",
-            title="半导体板块反弹",
+            title="???????",
             url="https://example.com/news",
-            source="测试新闻",
+            source="????",
             kind="news",
             sentiment=0.4,
         )
@@ -204,11 +247,11 @@ def test_report_includes_cn_risk_alert_and_key_links():
         market_stories=stories,
     )
 
-    assert "中国ETF/基金风险预警" in report
-    assert "CVaR95(5日)" in report
-    assert "关键链接" in report
+    assert "??ETF/??????" in report
+    assert "CVaR95(5?)" in report
+    assert "????" in report
     assert "fund.eastmoney.com/512480.html" in report
-    assert "半导体板块反弹" in report
+    assert "???????" in report
 
 
 def test_load_assets_reads_enabled_config(tmp_path):
@@ -237,8 +280,8 @@ def test_cn_fund_daily_normalizes_akshare_nav(monkeypatch):
     dates = pd.bdate_range(end="2026-07-02", periods=70)
     raw = pd.DataFrame(
         {
-            "净值日期": dates.strftime("%Y-%m-%d"),
-            "单位净值": np.linspace(1.0, 1.2, len(dates)),
+            "????": dates.strftime("%Y-%m-%d"),
+            "????": np.linspace(1.0, 1.2, len(dates)),
         }
     )
     fake_akshare = SimpleNamespace(
@@ -377,6 +420,144 @@ def test_sina_fallback_back_adjusts_split_like_jumps(monkeypatch):
 
     assert returns.min() > -0.05
     assert abs(frame["close"].iloc[60] / frame["close"].iloc[59] - 1.0) < 0.01
+
+
+def test_prediction_snapshot_and_forward_outcome_are_structured():
+    full_frame = make_price_frame(periods=120)
+    prediction_frame = full_frame.iloc[:90]
+    asset = monitor.Asset(symbol="MU", asset_type="US_STOCK", name_zh="????")
+    signal = score_signal(
+        monitor.calculate_signal(
+            "MU",
+            prediction_frame,
+            {"mean_score": 0.2, "negative_ratio": 0.1, "article_count": 4},
+            asset,
+        ),
+        portfolio_breadth=0.75,
+    )
+    timestamp = pd.Timestamp("2026-07-04T00:30:00Z").to_pydatetime()
+
+    snapshots = monitor.build_prediction_snapshots(
+        [signal],
+        timestamp,
+        portfolio_breadth=0.75,
+        market_stories=[],
+    )
+    snapshot = snapshots[0]
+
+    assert snapshot["symbol"] == "MU"
+    assert snapshot["sell_all_logit"] == signal.raw_logits[monitor.LABEL_SELL_ALL]
+    assert snapshot["sell_all_softmax"] == signal.probabilities[monitor.LABEL_SELL_ALL]
+    assert snapshot["raw_indicators"]["news_count"] == 4
+    assert "indicator_contributions" in snapshot
+
+    audit_config = {
+        "observation_windows": [5, 10, 20],
+        "clear_rebound_threshold_pct": 0.02,
+        "clear_drawdown_threshold_pct": -0.02,
+        "clear_rebound_threshold_atr": 1.0,
+        "clear_drawdown_threshold_atr": -1.0,
+        "severe_drawdown_threshold_pct": -0.08,
+        "min_bucket_samples": 2,
+    }
+    outcome = monitor.compute_forward_outcome(
+        snapshot,
+        full_frame,
+        audit_config,
+        timestamp,
+    )
+
+    assert outcome["forward_return_5d"] > 0
+    assert outcome["forward_max_drawdown_20d"] == 0.0
+    assert outcome["forward_max_rebound_20d"] > 0
+    assert outcome["forward_max_price_date_20d"] >= outcome["price_date"]
+    assert outcome["first_clear_move_pct"] in {"rebound", "drawdown", "none"}
+
+
+def test_save_history_writes_prediction_jsonl(monkeypatch, tmp_path):
+    frame = make_price_frame(periods=90)
+    signal = score_signal(
+        monitor.calculate_signal(
+            "MU",
+            frame,
+            {"mean_score": 0.1, "negative_ratio": 0.0, "article_count": 2},
+            monitor.Asset(symbol="MU", asset_type="US_STOCK"),
+        ),
+        portfolio_breadth=1.0,
+    )
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
+    output_path = monitor.save_history(
+        [signal],
+        signal.probabilities,
+        [],
+        signal.price_as_of,
+        frames={"MU": frame},
+        portfolio_breadth=1.0,
+    )
+
+    snapshots_path = tmp_path / "prediction_snapshots.jsonl"
+    assert output_path.exists()
+    assert snapshots_path.exists()
+    rows = monitor.read_jsonl(snapshots_path)
+    assert len(rows) == 1
+    assert rows[0]["portfolio_breadth"] == 1.0
+    assert rows[0]["keep_softmax"] == signal.probabilities[monitor.LABEL_KEEP]
+
+
+def test_evaluate_predictions_builds_bucket_and_correlation_reports(tmp_path):
+    snapshot_path = tmp_path / "prediction_snapshots.jsonl"
+    outcome_path = tmp_path / "prediction_outcomes.jsonl"
+    snapshots = []
+    outcomes = []
+    for idx in range(6):
+        timestamp = f"2026-01-{idx + 1:02d}T00:30:00+00:00"
+        snapshots.append(
+            {
+                "symbol": "MU" if idx < 3 else "SMH",
+                "prediction_date": f"2026-01-{idx + 1:02d}",
+                "prediction_timestamp_utc": timestamp,
+                "price_date": f"2026-01-{idx + 1:02d}",
+                "sell_all_softmax": idx / 5,
+                "reduce_on_rebound_softmax": 0.5,
+                "keep_softmax": 1 - idx / 5,
+            }
+        )
+        outcomes.append(
+            {
+                "symbol": "MU" if idx < 3 else "SMH",
+                "prediction_date": f"2026-01-{idx + 1:02d}",
+                "prediction_timestamp_utc": timestamp,
+                "price_date": f"2026-01-{idx + 1:02d}",
+                "forward_return_5d": 0.02 - idx * 0.01,
+                "forward_return_10d": 0.03 - idx * 0.01,
+                "forward_return_20d": 0.04 - idx * 0.01,
+                "forward_max_drawdown_5d": -idx * 0.01,
+                "forward_max_drawdown_10d": -idx * 0.012,
+                "forward_max_drawdown_20d": -idx * 0.015,
+                "forward_max_rebound_5d": 0.02,
+                "forward_max_rebound_10d": 0.03,
+                "forward_max_rebound_20d": 0.04,
+                "first_clear_move_pct": "rebound" if idx % 2 == 0 else "drawdown",
+            }
+        )
+    monitor.append_jsonl(snapshot_path, snapshots)
+    monitor.append_jsonl(outcome_path, outcomes)
+
+    frame = evaluate_predictions.load_audit_frame(snapshot_path, outcome_path)
+    bucket_report, corr_report = evaluate_predictions.build_reports(
+        frame,
+        {
+            "observation_windows": [5, 10, 20],
+            "severe_drawdown_threshold_pct": -0.05,
+            "min_bucket_samples": 2,
+        },
+    )
+
+    assert not bucket_report.empty
+    assert not corr_report.empty
+    assert set(bucket_report["scope_type"]) >= {"all_assets", "symbol", "year"}
+    assert "pearson_corr" in corr_report.columns
 
 
 def test_main_continues_when_one_ticker_fails(monkeypatch, tmp_path):

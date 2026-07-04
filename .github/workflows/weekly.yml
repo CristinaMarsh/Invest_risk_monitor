@@ -8,7 +8,7 @@ on:
     - cron: "30 0 * * 1-6"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   monitor:
@@ -30,7 +30,7 @@ jobs:
 
       - name: Run tests
         run: |
-          python -m py_compile monitor.py tests/test_scoring.py scripts/test_telegram.py
+          python -m py_compile monitor.py evaluate_predictions.py tests/test_scoring.py scripts/test_telegram.py
           python -m pytest -q
 
       - name: Validate required secrets
@@ -56,6 +56,28 @@ jobs:
           code=$?
           echo "$code" > monitor_exit_code.txt
           exit 0
+
+      - name: Commit prediction audit history
+        if: always()
+        run: |
+          code="$(cat monitor_exit_code.txt 2>/dev/null || echo 1)"
+          if [ "$code" != "0" ]; then
+            echo "Monitor failed; skip committing audit history."
+            exit 0
+          fi
+          if ! ls history/*.jsonl >/dev/null 2>&1; then
+            echo "No audit JSONL files to commit."
+            exit 0
+          fi
+          git config user.name "CristinaMarsh"
+          git config user.email "46376030+CristinaMarsh@users.noreply.github.com"
+          git add history/*.jsonl
+          if git diff --cached --quiet; then
+            echo "No audit history changes."
+            exit 0
+          fi
+          git commit -m "chore: append prediction audit history [skip ci]"
+          git push
 
       - name: Upload monitoring history
         if: always()

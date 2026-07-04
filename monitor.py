@@ -27,40 +27,49 @@ TELEGRAM_SAFE_LIMIT = 3900
 STALE_PRICE_DAYS = 5
 DEFAULT_TICKERS = "MU,SNDK,WDC,STX"
 DEFAULT_ASSET_CONFIG = "assets.json"
+DEFAULT_AUDIT_CONFIG = "audit_config.json"
 SUPPORTED_ASSET_TYPES = {"US_STOCK", "US_ETF", "CN_FUND", "CN_ETF"}
 TRADING_DAYS_PER_YEAR = 252
 RISK_LOOKBACK_DAYS = 120
 SPLIT_LIKE_JUMP_THRESHOLD = 0.30
+LABEL_SELL_ALL = "????"
+LABEL_REDUCE_ON_REBOUND = "??????????"
+LABEL_KEEP = "??"
+LOGIT_FIELD_BY_LABEL = {
+    LABEL_SELL_ALL: "sell_all",
+    LABEL_REDUCE_ON_REBOUND: "reduce_on_rebound",
+    LABEL_KEEP: "keep",
+}
 
 NEGATIVE_KEYWORDS = (
-    "下跌",
-    "回调",
-    "调整",
-    "风险",
-    "利空",
-    "减持",
-    "亏损",
-    "放缓",
-    "承压",
-    "监管",
-    "制裁",
-    "限制",
-    "大跌",
-    "跳水",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
 )
 POSITIVE_KEYWORDS = (
-    "上涨",
-    "反弹",
-    "利好",
-    "增长",
-    "突破",
-    "创新高",
-    "扩产",
-    "订单",
-    "景气",
-    "回暖",
-    "超预期",
-    "修复",
+    "??",
+    "??",
+    "??",
+    "??",
+    "??",
+    "???",
+    "??",
+    "??",
+    "??",
+    "??",
+    "???",
+    "??",
 )
 
 
@@ -89,6 +98,8 @@ class Signal:
     volume_ratio_5_20: float
     news_score: float
     negative_news_ratio: float
+    news_count: int = 0
+    atr_14_pct: float = 0.0
     asset_type: str = "US_STOCK"
     name_zh: str = ""
     name_en: str = ""
@@ -97,6 +108,11 @@ class Signal:
     breakdown_score: float = 0.0
     oversold_score: float = 0.0
     news_risk_score: float = 0.0
+    positive_momentum_score: float = 0.0
+    portfolio_breadth: float = 0.0
+    raw_logits: dict[str, float] | None = None
+    score_components: dict[str, float] | None = None
+    indicator_contributions: dict[str, dict[str, float]] | None = None
     probabilities: dict[str, float] | None = None
     recommendation: str = ""
 
@@ -268,10 +284,10 @@ def load_assets(config_path: str | None = None) -> list[Asset]:
 
 def asset_type_label(asset_type: str) -> str:
     return {
-        "US_STOCK": "美股",
-        "US_ETF": "美股ETF",
-        "CN_FUND": "中国基金",
-        "CN_ETF": "中国ETF",
+        "US_STOCK": "??",
+        "US_ETF": "??ETF",
+        "CN_FUND": "????",
+        "CN_ETF": "??ETF",
     }.get(asset_type, asset_type)
 
 
@@ -293,7 +309,7 @@ def safe_link(url: str, label: str) -> str:
 def truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
-    return value[: max(0, limit - 1)].rstrip() + "…"
+    return value[: max(0, limit - 1)].rstrip() + "."
 
 
 def headline_sentiment(text: str) -> float:
@@ -306,10 +322,10 @@ def headline_sentiment(text: str) -> float:
 
 def sentiment_label(score: float) -> str:
     if score >= 0.20:
-        return "偏正"
+        return "??"
     if score <= -0.20:
-        return "偏负"
-    return "中性"
+        return "??"
+    return "??"
 
 
 def theme_query(asset: Asset | Signal) -> str:
@@ -330,17 +346,17 @@ def key_links_for_asset(asset: Asset | Signal) -> list[tuple[str, str]]:
     if asset_type in {"CN_ETF", "CN_FUND"}:
         links.extend(
             [
-                ("天天基金", f"https://fund.eastmoney.com/{symbol}.html"),
-                ("新闻", f"https://so.eastmoney.com/news/s?keyword={query}"),
-                ("股吧", f"https://guba.eastmoney.com/list,of{symbol}.html"),
-                ("雪球", f"https://xueqiu.com/k?q={query}"),
+                ("????", f"https://fund.eastmoney.com/{symbol}.html"),
+                ("??", f"https://so.eastmoney.com/news/s?keyword={query}"),
+                ("??", f"https://guba.eastmoney.com/list,of{symbol}.html"),
+                ("??", f"https://xueqiu.com/k?q={query}"),
             ]
         )
     elif uses_alpha_vantage(asset_type):
         links.extend(
             [
                 ("Yahoo", f"https://finance.yahoo.com/quote/{symbol}"),
-                ("新闻", f"https://www.google.com/search?q={quote(symbol + ' stock news')}"),
+                ("??", f"https://www.google.com/search?q={quote(symbol + ' stock news')}"),
             ]
         )
     return links
@@ -377,22 +393,22 @@ def consecutive_down_days(close: pd.Series) -> int:
 
 def risk_level(score: float) -> str:
     if score >= 0.72:
-        return "高"
+        return "?"
     if score >= 0.55:
-        return "中高"
+        return "??"
     if score >= 0.38:
-        return "中"
-    return "低"
+        return "?"
+    return "?"
 
 
 def direction_label(signal: Signal) -> str:
     if signal.ret_20d <= -0.08 and signal.ma20_gap <= -0.03:
-        return "明显偏弱"
+        return "????"
     if signal.ret_20d < 0 or signal.ma20_gap < 0:
-        return "转弱"
+        return "??"
     if signal.ret_20d > 0.05 and signal.ma20_gap > 0 and signal.rsi_14 >= 52:
-        return "偏强"
-    return "震荡"
+        return "??"
+    return "??"
 
 
 def alpha_get(params: dict[str, Any], api_key: str) -> dict[str, Any]:
@@ -485,10 +501,10 @@ def normalize_price_frame(
     symbol: str,
     date_candidates: tuple[str, ...],
     close_candidates: tuple[str, ...],
-    open_candidates: tuple[str, ...] = ("开盘", "open"),
-    high_candidates: tuple[str, ...] = ("最高", "high"),
-    low_candidates: tuple[str, ...] = ("最低", "low"),
-    volume_candidates: tuple[str, ...] = ("成交量", "volume"),
+    open_candidates: tuple[str, ...] = ("??", "open"),
+    high_candidates: tuple[str, ...] = ("??", "high"),
+    low_candidates: tuple[str, ...] = ("??", "low"),
+    volume_candidates: tuple[str, ...] = ("???", "volume"),
 ) -> pd.DataFrame:
     if raw is None or raw.empty:
         raise RuntimeError(f"No price history returned for {symbol}")
@@ -564,12 +580,12 @@ def back_adjust_split_like_jumps(
 
 def fetch_cn_fund_daily(symbol: str) -> pd.DataFrame:
     ak = import_akshare()
-    raw = ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")
+    raw = ak.fund_open_fund_info_em(symbol=symbol, indicator="??????")
     return normalize_price_frame(
         raw,
         symbol,
-        date_candidates=("净值日期", "日期", "date"),
-        close_candidates=("单位净值", "净值", "累计净值", "close"),
+        date_candidates=("????", "??", "date"),
+        close_candidates=("????", "??", "????", "close"),
     )
 
 
@@ -616,19 +632,19 @@ def fetch_cn_etf_daily_sina(symbol: str) -> pd.DataFrame:
         raise RuntimeError(f"No Sina ETF daily history returned for {symbol}")
     frame = pd.DataFrame(raw).rename(
         columns={
-            "day": "日期",
-            "open": "开盘",
-            "high": "最高",
-            "low": "最低",
-            "close": "收盘",
-            "volume": "成交量",
+            "day": "??",
+            "open": "??",
+            "high": "??",
+            "low": "??",
+            "close": "??",
+            "volume": "???",
         }
     )
     normalized = normalize_price_frame(
         frame,
         symbol,
-        date_candidates=("日期", "date"),
-        close_candidates=("收盘", "close"),
+        date_candidates=("??", "date"),
+        close_candidates=("??", "close"),
     )
     return back_adjust_split_like_jumps(normalized)
 
@@ -690,19 +706,19 @@ def fetch_cn_etf_daily_eastmoney(symbol: str) -> pd.DataFrame:
             continue
         rows.append(
             {
-                "日期": parts[0],
-                "开盘": parts[1],
-                "收盘": parts[2],
-                "最高": parts[3],
-                "最低": parts[4],
-                "成交量": parts[5],
+                "??": parts[0],
+                "??": parts[1],
+                "??": parts[2],
+                "??": parts[3],
+                "??": parts[4],
+                "???": parts[5],
             }
         )
     return normalize_price_frame(
         pd.DataFrame(rows),
         symbol,
-        date_candidates=("日期", "date"),
-        close_candidates=("收盘", "close"),
+        date_candidates=("??", "date"),
+        close_candidates=("??", "close"),
     )
 
 
@@ -721,8 +737,8 @@ def fetch_cn_etf_daily(symbol: str) -> pd.DataFrame:
         return normalize_price_frame(
             raw,
             symbol,
-            date_candidates=("日期", "date"),
-            close_candidates=("收盘", "close"),
+            date_candidates=("??", "date"),
+            close_candidates=("??", "close"),
         )
     except Exception as akshare_error:
         errors.append(f"akshare failed: {akshare_error}")
@@ -868,10 +884,10 @@ def fetch_cn_asset_news(ak: Any, asset: Asset, limit: int = 2) -> list[MarketSto
             row,
             asset.symbol,
             "news",
-            title_candidates=("新闻标题", "标题", "title", "Title"),
-            url_candidates=("新闻链接", "链接", "url", "URL"),
-            source_candidates=("文章来源", "来源", "source", "Source"),
-            published_candidates=("发布时间", "时间", "日期", "date", "Date"),
+            title_candidates=("????", "??", "title", "Title"),
+            url_candidates=("????", "??", "url", "URL"),
+            source_candidates=("????", "??", "source", "Source"),
+            published_candidates=("????", "??", "??", "date", "Date"),
         )
         if story:
             stories.append(story)
@@ -883,7 +899,7 @@ def fetch_cn_asset_news(ak: Any, asset: Asset, limit: int = 2) -> list[MarketSto
 def row_matches_asset(row: pd.Series, asset: Asset) -> bool:
     text = " ".join(str(value) for value in row.values if pd.notna(value))
     candidates = {asset.symbol, asset.name_zh, asset.name_en}
-    candidates.update(part for part in asset.note.replace("，", " ").split() if len(part) >= 2)
+    candidates.update(part for part in asset.note.replace(",", " ").split() if len(part) >= 2)
     return any(candidate and candidate in text for candidate in candidates)
 
 
@@ -900,7 +916,7 @@ def fetch_cn_social_mentions(ak: Any, assets: list[Asset], limit: int = 6) -> li
             continue
 
         raw = None
-        for kwargs in ({}, {"symbol": "最热门"}):
+        for kwargs in ({}, {"symbol": "???"}):
             try:
                 raw = function(**kwargs)
                 break
@@ -920,10 +936,10 @@ def fetch_cn_social_mentions(ak: Any, assets: list[Asset], limit: int = 6) -> li
                 row,
                 matched.symbol,
                 "social",
-                title_candidates=("股票简称", "简称", "名称", "标题", "内容", "关注", "讨论", "symbol"),
-                url_candidates=("链接", "url", "URL"),
-                source_candidates=("来源", "平台", "source", "Source"),
-                published_candidates=("时间", "日期", "发布时间", "date", "Date"),
+                title_candidates=("????", "??", "??", "??", "??", "??", "??", "symbol"),
+                url_candidates=("??", "url", "URL"),
+                source_candidates=("??", "??", "source", "Source"),
+                published_candidates=("??", "??", "????", "date", "Date"),
             )
             if story is None:
                 title = truncate_text(" ".join(str(value) for value in row.values if pd.notna(value)), 120)
@@ -981,6 +997,27 @@ def rsi(series: pd.Series, period: int = 14) -> float:
     return safe_float(latest, 50.0)
 
 
+def atr_pct(frame: pd.DataFrame, period: int = 14) -> float:
+    if not {"high", "low", "close"}.issubset(frame.columns):
+        return 0.0
+
+    high = frame["high"].astype(float)
+    low = frame["low"].astype(float)
+    close = frame["close"].astype(float)
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    latest_atr = true_range.rolling(period).mean().iloc[-1]
+    latest_close = close.iloc[-1]
+    return safe_ratio(safe_float(latest_atr), safe_float(latest_close), 0.0)
+
+
 def calculate_signal(
     ticker: str,
     frame: pd.DataFrame,
@@ -1010,6 +1047,7 @@ def calculate_signal(
 
     news_score = safe_float(news.get("mean_score"))
     negative_ratio = safe_float(news.get("negative_ratio"))
+    news_count = int(safe_float(news.get("article_count")))
 
     return Signal(
         ticker=ticker,
@@ -1024,6 +1062,8 @@ def calculate_signal(
         volume_ratio_5_20=volume_ratio,
         news_score=news_score,
         negative_news_ratio=negative_ratio,
+        news_count=news_count,
+        atr_14_pct=atr_pct(frame),
         asset_type=asset.asset_type if asset else "US_STOCK",
         name_zh=asset.name_zh if asset else "",
         name_en=asset.name_en if asset else "",
@@ -1050,67 +1090,116 @@ def softmax(scores: dict[str, float], temperature: float = 0.85) -> dict[str, fl
     return {key: float(value) for key, value in zip(keys, probabilities)}
 
 
-def score_signal(signal: Signal, breadth: float) -> Signal:
-    breadth = clip01(breadth)
+def contribution_row(
+    sell_all: float = 0.0,
+    reduce_on_rebound: float = 0.0,
+    keep: float = 0.0,
+) -> dict[str, float]:
+    return {
+        "sell_all": safe_float(sell_all),
+        "reduce_on_rebound": safe_float(reduce_on_rebound),
+        "keep": safe_float(keep),
+    }
+
+
+def score_signal(signal: Signal, portfolio_breadth: float) -> Signal:
+    portfolio_breadth = clip01(portfolio_breadth)
     # Each component is intentionally transparent and bounded to [0, 1].
-    breakdown = np.mean(
-        [
-            float(signal.ma20_gap < 0),
-            float(signal.ma50_gap < 0),
-            clip01(-signal.ret_20d / 0.20),
-            clip01(-signal.drawdown_60d / 0.35),
-            clip01((signal.volume_ratio_5_20 - 1.0) / 1.5),
-        ]
-    )
+    breakdown_components = {
+        "ma20_below_average": float(signal.ma20_gap < 0),
+        "ma50_below_average": float(signal.ma50_gap < 0),
+        "ret_20d_negative": clip01(-signal.ret_20d / 0.20),
+        "drawdown_60d_depth": clip01(-signal.drawdown_60d / 0.35),
+        "volume_expansion": clip01((signal.volume_ratio_5_20 - 1.0) / 1.5),
+    }
+    oversold_components = {
+        "rsi_14_oversold": clip01((42.0 - signal.rsi_14) / 22.0),
+        "ret_5d_negative": clip01(-signal.ret_5d / 0.15),
+        "ma20_gap_negative": clip01(-signal.ma20_gap / 0.15),
+    }
+    news_components = {
+        "news_sentiment_risk": clip01((-signal.news_score + 0.10) / 0.60),
+        "negative_news_ratio": clip01(signal.negative_news_ratio / 0.60),
+    }
+    positive_momentum_components = {
+        "ret_60d_positive": clip01(signal.ret_60d / 0.30),
+        "ma20_gap_positive": clip01(signal.ma20_gap / 0.15),
+        "ma50_gap_positive": clip01(signal.ma50_gap / 0.25),
+    }
 
-    oversold = np.mean(
-        [
-            clip01((42.0 - signal.rsi_14) / 22.0),
-            clip01(-signal.ret_5d / 0.15),
-            clip01(-signal.ma20_gap / 0.15),
-        ]
-    )
-
-    news_risk = np.mean(
-        [
-            clip01((-signal.news_score + 0.10) / 0.60),
-            clip01(signal.negative_news_ratio / 0.60),
-        ]
-    )
-
-    positive_momentum = np.mean(
-        [
-            clip01(signal.ret_60d / 0.30),
-            clip01(signal.ma20_gap / 0.15),
-            clip01(signal.ma50_gap / 0.25),
-        ]
-    )
-    breadth_risk = 1.0 - breadth
+    breakdown = np.mean(list(breakdown_components.values()))
+    oversold = np.mean(list(oversold_components.values()))
+    news_risk = np.mean(list(news_components.values()))
+    positive_momentum = np.mean(list(positive_momentum_components.values()))
+    breadth_risk = 1.0 - portfolio_breadth
 
     raw_scores = {
-        "全部卖出": (
+        LABEL_SELL_ALL: (
             1.95 * breakdown
             + 1.15 * news_risk
             + 0.75 * breadth_risk
             - 0.65 * oversold
         ),
-        "等待回弹后卖出或减仓": (
+        LABEL_REDUCE_ON_REBOUND: (
             1.55 * oversold
             + 0.85 * breakdown
             + 0.50 * news_risk
             + 0.35 * breadth_risk
         ),
-        "留下": (
+        LABEL_KEEP: (
             1.35 * (1.0 - breakdown)
             + 0.95 * (1.0 - news_risk)
             + 0.75 * positive_momentum
-            + 0.45 * breadth
+            + 0.45 * portfolio_breadth
         ),
     }
+
+    indicator_contributions: dict[str, dict[str, float]] = {}
+    for name, value in breakdown_components.items():
+        indicator_contributions[name] = contribution_row(
+            sell_all=(1.95 / len(breakdown_components)) * value,
+            reduce_on_rebound=(0.85 / len(breakdown_components)) * value,
+            keep=-(1.35 / len(breakdown_components)) * value,
+        )
+    for name, value in oversold_components.items():
+        indicator_contributions[name] = contribution_row(
+            sell_all=-(0.65 / len(oversold_components)) * value,
+            reduce_on_rebound=(1.55 / len(oversold_components)) * value,
+        )
+    for name, value in news_components.items():
+        indicator_contributions[name] = contribution_row(
+            sell_all=(1.15 / len(news_components)) * value,
+            reduce_on_rebound=(0.50 / len(news_components)) * value,
+            keep=-(0.95 / len(news_components)) * value,
+        )
+    for name, value in positive_momentum_components.items():
+        indicator_contributions[name] = contribution_row(
+            keep=(0.75 / len(positive_momentum_components)) * value,
+        )
+    indicator_contributions["portfolio_breadth_risk"] = contribution_row(
+        sell_all=0.75 * breadth_risk,
+        reduce_on_rebound=0.35 * breadth_risk,
+    )
+    indicator_contributions["portfolio_breadth_positive"] = contribution_row(
+        keep=0.45 * portfolio_breadth,
+    )
+    indicator_contributions["keep_intercept"] = contribution_row(keep=1.35 + 0.95)
 
     signal.breakdown_score = float(breakdown)
     signal.oversold_score = float(oversold)
     signal.news_risk_score = float(news_risk)
+    signal.positive_momentum_score = float(positive_momentum)
+    signal.portfolio_breadth = float(portfolio_breadth)
+    signal.raw_logits = {key: safe_float(value) for key, value in raw_scores.items()}
+    signal.score_components = {
+        "breakdown": float(breakdown),
+        "oversold": float(oversold),
+        "news_risk": float(news_risk),
+        "positive_momentum": float(positive_momentum),
+        "portfolio_breadth": float(portfolio_breadth),
+        "portfolio_breadth_risk": float(breadth_risk),
+    }
+    signal.indicator_contributions = indicator_contributions
     signal.probabilities = softmax(raw_scores)
     signal.recommendation = max(signal.probabilities, key=signal.probabilities.get)
     return signal
@@ -1136,20 +1225,20 @@ def calculate_risk_alert(signal: Signal, frame: pd.DataFrame) -> RiskAlert:
 
     warnings: list[str] = []
     if sample_days < RISK_LOOKBACK_DAYS:
-        warnings.append("样本不足，暂不估计CVaR")
+        warnings.append("????,????CVaR")
     if cvar_5d is not None and signal.ret_5d <= cvar_5d:
-        warnings.append("近5日跌幅进入历史尾部区间")
+        warnings.append("?5???????????")
     if signal.ma20_gap < 0 and signal.ret_20d < 0:
-        warnings.append("短期趋势转弱")
+        warnings.append("??????")
     if vol_ratio >= 1.35:
-        warnings.append("20日波动率明显高于60日")
+        warnings.append("20????????60?")
     if signal.volume_ratio_5_20 >= 1.8:
-        warnings.append("成交量显著放大")
+        warnings.append("???????")
     down_days = consecutive_down_days(close)
     if down_days >= 3:
-        warnings.append(f"连续下跌{down_days}日")
+        warnings.append(f"????{down_days}?")
     if current_drawdown <= -0.12:
-        warnings.append("距离60日高点回撤较深")
+        warnings.append("??60???????")
 
     cvar_component = (
         clip01((-(cvar_5d or 0.0) - 0.04) / 0.10) if cvar_5d is not None else 0.35
@@ -1205,9 +1294,9 @@ def price_age_days(as_of: str) -> int | None:
 
 def short_probability_line(probabilities: dict[str, float]) -> str:
     labels = {
-        "全部卖出": "卖出",
-        "等待回弹后卖出或减仓": "等待",
-        "留下": "留下",
+        LABEL_SELL_ALL: "??",
+        LABEL_REDUCE_ON_REBOUND: "??",
+        LABEL_KEEP: "??",
     }
     return " / ".join(
         f"{labels.get(label, label)} {probability_pct(value)}"
@@ -1217,7 +1306,7 @@ def short_probability_line(probabilities: dict[str, float]) -> str:
 
 def optional_pct(value: float | None) -> str:
     if value is None:
-        return "样本不足"
+        return "????"
     return pct(value)
 
 
@@ -1230,13 +1319,13 @@ def stories_by_symbol(stories: list[MarketStory]) -> dict[str, list[MarketStory]
 
 def story_sentiment_summary(stories: list[MarketStory]) -> str:
     if not stories:
-        return "暂无可用新闻/热度数据"
+        return "??????/????"
     score = float(np.mean([story.sentiment for story in stories]))
     news_count = sum(1 for story in stories if story.kind == "news")
     social_count = sum(1 for story in stories if story.kind == "social")
     return (
         f"{sentiment_label(score)} "
-        f"(新闻{news_count}条，热度{social_count}条，标题情绪{score:+.2f})"
+        f"(??{news_count}?,??{social_count}?,????{score:+.2f})"
     )
 
 
@@ -1253,22 +1342,22 @@ def us_market_summary(signals: list[Signal]) -> list[str]:
     defensive_ret20 = (
         float(np.mean([signal.ret_20d for signal in defensive])) if defensive else 0.0
     )
-    breadth = float(np.mean([signal.ma20_gap > 0 for signal in us_signals]))
+    monitored_us_breadth = float(np.mean([signal.ma20_gap > 0 for signal in us_signals]))
     news_score = float(np.mean([signal.news_score for signal in us_signals]))
     negative_ratio = float(np.mean([signal.negative_news_ratio for signal in us_signals]))
 
     spread = growth_ret20 - defensive_ret20
-    if spread >= 0.03 and breadth >= 0.55:
-        appetite = "偏强"
-    elif spread <= -0.03 or breadth <= 0.35:
-        appetite = "偏弱"
+    if spread >= 0.03 and monitored_us_breadth >= 0.55:
+        appetite = "??"
+    elif spread <= -0.03 or monitored_us_breadth <= 0.35:
+        appetite = "??"
     else:
-        appetite = "中性"
+        appetite = "??"
 
     return [
-        f"风险偏好：{appetite}",
-        f"成长/科技20日 {pct(growth_ret20)}，红利防御20日 {pct(defensive_ret20)}，相对强弱 {pct(spread)}",
-        f"站上MA20比例 {breadth * 100:.0f}%，新闻情绪 {news_score:+.2f}，负面新闻占比 {negative_ratio * 100:.0f}%",
+        f"????:{appetite}",
+        f"??/??20? {pct(growth_ret20)},????20? {pct(defensive_ret20)},???? {pct(spread)}",
+        f"????????? {monitored_us_breadth * 100:.0f}%,???? {news_score:+.2f},?????? {negative_ratio * 100:.0f}%",
     ]
 
 
@@ -1296,29 +1385,30 @@ def build_report(
     overall = max(aggregate, key=aggregate.get)
 
     lines = [
-        "<b>投资风险日报</b>",
-        f"数据截至：{html.escape(as_of)}",
+        "<b>??????</b>",
+        f"????:{html.escape(as_of)}",
         "",
-        f"<b>模型倾向：{html.escape(overall)}</b>",
-        "三分类参考概率：" + short_probability_line(aggregate),
-        "说明：这是风险监测和信息整理，不是自动交易指令。",
+        f"<b>????:{html.escape(overall)}</b>",
+        "???????????:" + short_probability_line(aggregate),
+        "??:??????????? softmax ?????,???100%,??????????,??????????",
+        "???????????,?????????",
         "",
     ]
 
     age_days = price_age_days(as_of)
     if age_days is not None and age_days > STALE_PRICE_DAYS:
-        lines.insert(3, f"注意：最新价格数据距今天 {age_days} 天，可能包含非交易日延迟。")
+        lines.insert(3, f"??:????????? {age_days} ?,???????????")
         lines.insert(4, "")
 
     us_summary = us_market_summary(signals)
     if us_summary:
-        lines.append("<b>美股大方向</b>")
+        lines.append("<b>?????</b>")
         lines.extend(us_summary)
         lines.append("")
 
     cn_signals = [signal for signal in signals if signal.asset_type in {"CN_ETF", "CN_FUND"}]
     if cn_signals:
-        lines.append("<b>中国ETF/基金风险预警</b>")
+        lines.append("<b>??ETF/??????</b>")
     for signal in cn_signals:
         alert = risk_alerts.get(signal.ticker)
         stories = grouped_stories.get(signal.ticker, [])
@@ -1326,25 +1416,25 @@ def build_report(
             safe_link(url, label) for label, url in key_links_for_asset(signal)
         )
         if alert:
-            warning_text = "；".join(alert.warnings[:3]) if alert.warnings else "暂无明显极端预警"
+            warning_text = ";".join(alert.warnings[:3]) if alert.warnings else "????????"
             lines.extend(
                 [
                     (
                         f"<b>{html.escape(signal.display_name())}</b> "
-                        f"预警 {html.escape(alert.level)} / 走向 {html.escape(alert.direction)}"
+                        f"?? {html.escape(alert.level)} / ?? {html.escape(alert.direction)}"
                     ),
                     (
-                        f"价格：5日 {pct(signal.ret_5d)} / 20日 {pct(signal.ret_20d)} / "
-                        f"当前回撤 {pct(alert.current_drawdown_60d)} / RSI {signal.rsi_14:.1f}"
+                        f"??:5? {pct(signal.ret_5d)} / 20? {pct(signal.ret_20d)} / "
+                        f"???? {pct(alert.current_drawdown_60d)} / RSI {signal.rsi_14:.1f}"
                     ),
                     (
-                        f"风险：CVaR95(5日) {optional_pct(alert.cvar_95_5d)} / "
-                        f"20日波动 {pct(alert.annual_vol_20d)} / "
-                        f"波动放大 {alert.vol_ratio_20_60:.2f}x"
+                        f"??:CVaR95(5?) {optional_pct(alert.cvar_95_5d)} / "
+                        f"20??? {pct(alert.annual_vol_20d)} / "
+                        f"???? {alert.vol_ratio_20_60:.2f}x"
                     ),
-                    f"新闻/热度：{html.escape(story_sentiment_summary(stories))}",
-                    f"预警依据：{html.escape(warning_text)}",
-                    f"关键链接：{links}",
+                    f"??/??:{html.escape(story_sentiment_summary(stories))}",
+                    f"????:{html.escape(warning_text)}",
+                    f"????:{links}",
                     "",
                 ]
             )
@@ -1352,19 +1442,19 @@ def build_report(
             lines.extend(
                 [
                     f"<b>{html.escape(signal.display_name())}</b>",
-                    f"价格：5日 {pct(signal.ret_5d)} / 20日 {pct(signal.ret_20d)} / RSI {signal.rsi_14:.1f}",
-                    f"新闻/热度：{html.escape(story_sentiment_summary(stories))}",
-                    f"关键链接：{links}",
+                    f"??:5? {pct(signal.ret_5d)} / 20? {pct(signal.ret_20d)} / RSI {signal.rsi_14:.1f}",
+                    f"??/??:{html.escape(story_sentiment_summary(stories))}",
+                    f"????:{links}",
                     "",
                 ]
             )
 
     if market_stories:
-        lines.append("<b>中国新闻/热度摘录</b>")
+        lines.append("<b>????/????</b>")
         for story in market_stories[:8]:
             title = html.escape(truncate_text(story.title, 180))
             source = html.escape(truncate_text(story.source or story.kind, 60))
-            label = "新闻" if story.kind == "news" else "热度"
+            label = "??" if story.kind == "news" else "??"
             if story.url and is_safe_http_url(story.url):
                 lines.append(
                     f'- [{html.escape(story.symbol)} {label}] '
@@ -1374,38 +1464,38 @@ def build_report(
                 lines.append(f"- [{html.escape(story.symbol)} {label}] {title}  {source}")
         lines.append("")
 
-    lines.append("<b>单资产三分类参考</b>")
+    lines.append("<b>??????????</b>")
     for signal in signals:
         probabilities = signal.probabilities or {}
         lines.extend(
             [
                 (
                     f"<b>{html.escape(signal.display_name())}</b>  "
-                    f"倾向 {html.escape(signal.recommendation)}"
+                    f"?? {html.escape(signal.recommendation)}"
                 ),
                 (
                     f"{html.escape(asset_type_label(signal.asset_type))} / "
-                    f"最新价 {signal.close:.2f} / "
-                    f"数据日 {html.escape(signal.price_as_of or as_of)}"
+                    f"??? {signal.close:.2f} / "
+                    f"??? {html.escape(signal.price_as_of or as_of)}"
                 ),
                 (
-                    f"5日 {pct(signal.ret_5d)} / 20日 {pct(signal.ret_20d)} / "
-                    f"60日 {pct(signal.ret_60d)} / RSI {signal.rsi_14:.1f}"
+                    f"5? {pct(signal.ret_5d)} / 20? {pct(signal.ret_20d)} / "
+                    f"60? {pct(signal.ret_60d)} / RSI {signal.rsi_14:.1f}"
                 ),
                 (
-                    f"MA20偏离 {pct(signal.ma20_gap)} / "
-                    f"60日最大回撤 {pct(signal.drawdown_60d)} / "
-                    f"新闻情绪 {signal.news_score:+.2f}"
+                    f"MA20?? {pct(signal.ma20_gap)} / "
+                    f"60????? {pct(signal.drawdown_60d)} / "
+                    f"???? {signal.news_score:+.2f}"
                 ),
                 short_probability_line(probabilities),
             ]
         )
         if signal.note:
-            lines.append(f"注：{html.escape(truncate_text(signal.note, 160))}")
+            lines.append(f"?:{html.escape(truncate_text(signal.note, 160))}")
         lines.append("")
 
     if top_news:
-        lines.append("<b>美股最新新闻</b>")
+        lines.append("<b>??????</b>")
         for item in top_news[:4]:
             title = html.escape(truncate_text(item["title"], 240))
             source = html.escape(truncate_text(item["source"], 80))
@@ -1418,7 +1508,7 @@ def build_report(
         lines.append("")
 
     if failures:
-        lines.append("<b>未纳入计算的数据</b>")
+        lines.append("<b>????????</b>")
         for failure in failures[:8]:
             lines.append(
                 "- "
@@ -1427,16 +1517,16 @@ def build_report(
                 f"{html.escape(truncate_text(failure.error, 180))}"
             )
         if len(failures) > 8:
-            lines.append(f"- 其余 {len(failures) - 8} 项略")
+            lines.append(f"- ?? {len(failures) - 8} ??")
         lines.append("")
 
     lines.extend(
         [
-            "<b>解释</b>",
-            "概率来自透明规则评分和 Softmax 转换，尚未经过个人持仓约束和历史概率校准。",
-            "中国ETF/基金预警使用趋势、回撤、波动、VaR/CVaR、成交量和新闻/热度链接做辅助判断。",
-            "新闻和社交热度只作为解释层，暂不改变三分类评分权重和阈值。",
-            "用于风险监测，不构成自动交易指令。",
+            "<b>??</b>",
+            "??????????? softmax ?????,???100%,??????????,??????????",
+            "??ETF/???????????????VaR/CVaR???????/??????????",
+            "?????????????,???????????????",
+            "??????,??????????",
         ]
     )
     return "\n".join(lines), aggregate
@@ -1498,6 +1588,294 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
             raise RuntimeError(f"Telegram error: {description}")
 
 
+def load_audit_config(path: str | None = None) -> dict[str, Any]:
+    config_path = Path(path or os.getenv("AUDIT_CONFIG") or DEFAULT_AUDIT_CONFIG)
+    if not config_path.exists():
+        raise RuntimeError(f"Missing audit config file: {config_path}")
+
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    required = {
+        "observation_windows",
+        "clear_rebound_threshold_pct",
+        "clear_drawdown_threshold_pct",
+        "clear_rebound_threshold_atr",
+        "clear_drawdown_threshold_atr",
+        "severe_drawdown_threshold_pct",
+        "min_bucket_samples",
+    }
+    missing = sorted(required - set(data))
+    if missing:
+        raise RuntimeError(f"Audit config missing keys: {', '.join(missing)}")
+
+    windows = sorted({int(value) for value in data["observation_windows"]})
+    if not windows or min(windows) <= 0:
+        raise RuntimeError("Audit config observation_windows must contain positive integers")
+    data["observation_windows"] = windows
+    return data
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def append_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+
+
+def compact_label_values(values: dict[str, float] | None) -> dict[str, float]:
+    values = values or {}
+    return {
+        field_name: safe_float(values.get(label))
+        for label, field_name in LOGIT_FIELD_BY_LABEL.items()
+    }
+
+
+def raw_indicator_snapshot(
+    signal: Signal,
+    portfolio_breadth: float,
+    market_story_count: int = 0,
+    market_story_sentiment: float = 0.0,
+) -> dict[str, float | int]:
+    return {
+        "ret_5d": signal.ret_5d,
+        "ret_20d": signal.ret_20d,
+        "ret_60d": signal.ret_60d,
+        "drawdown_60d": signal.drawdown_60d,
+        "rsi_14": signal.rsi_14,
+        "ma20_gap": signal.ma20_gap,
+        "ma50_gap": signal.ma50_gap,
+        "volume_ratio_5_20": signal.volume_ratio_5_20,
+        "news_score": signal.news_score,
+        "negative_news_ratio": signal.negative_news_ratio,
+        "news_count": signal.news_count,
+        "atr_14_pct": signal.atr_14_pct,
+        "portfolio_breadth": portfolio_breadth,
+        "market_story_count": market_story_count,
+        "market_story_sentiment": market_story_sentiment,
+    }
+
+
+def audit_record_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(row.get("symbol", "")),
+        str(row.get("prediction_timestamp_utc") or row.get("prediction_date", "")),
+        str(row.get("price_date", "")),
+    )
+
+
+def build_prediction_snapshots(
+    signals: list[Signal],
+    prediction_timestamp: datetime,
+    portfolio_breadth: float,
+    market_stories: list[MarketStory] | None = None,
+) -> list[dict[str, Any]]:
+    grouped_stories = stories_by_symbol(market_stories or [])
+    snapshots = []
+    for signal in signals:
+        stories = grouped_stories.get(signal.ticker, [])
+        story_sentiment = (
+            float(np.mean([story.sentiment for story in stories])) if stories else 0.0
+        )
+        logits = compact_label_values(signal.raw_logits)
+        probabilities = compact_label_values(signal.probabilities)
+        news_count = signal.news_count if signal.news_count else len(stories)
+        news_sentiment_mean = signal.news_score if signal.news_count else story_sentiment
+        snapshots.append(
+            {
+                "schema_version": 1,
+                "symbol": signal.ticker,
+                "asset_type": signal.asset_type,
+                "prediction_date": prediction_timestamp.date().isoformat(),
+                "prediction_timestamp_utc": prediction_timestamp.isoformat(),
+                "price_date": signal.price_as_of,
+                "adjusted_close": signal.close,
+                "sell_all_logit": logits["sell_all"],
+                "reduce_on_rebound_logit": logits["reduce_on_rebound"],
+                "keep_logit": logits["keep"],
+                "sell_all_softmax": probabilities["sell_all"],
+                "reduce_on_rebound_softmax": probabilities["reduce_on_rebound"],
+                "keep_softmax": probabilities["keep"],
+                "predicted_class": signal.recommendation,
+                "raw_indicators": raw_indicator_snapshot(
+                    signal,
+                    portfolio_breadth,
+                    market_story_count=len(stories),
+                    market_story_sentiment=story_sentiment,
+                ),
+                "score_components": signal.score_components or {},
+                "indicator_contributions": signal.indicator_contributions or {},
+                "news_count": news_count,
+                "news_sentiment_mean": news_sentiment_mean,
+                "negative_news_ratio": signal.negative_news_ratio,
+                "portfolio_breadth": portfolio_breadth,
+            }
+        )
+    return snapshots
+
+
+def first_threshold_cross(
+    relative_moves: pd.Series,
+    rebound_threshold: float,
+    drawdown_threshold: float,
+) -> tuple[str, str | None, float | None]:
+    for date_value, move in relative_moves.iloc[1:].items():
+        move_value = safe_float(move)
+        if move_value >= rebound_threshold:
+            return "rebound", pd.Timestamp(date_value).strftime("%Y-%m-%d"), move_value
+        if move_value <= drawdown_threshold:
+            return "drawdown", pd.Timestamp(date_value).strftime("%Y-%m-%d"), move_value
+    return "none", None, None
+
+
+def compute_forward_outcome(
+    snapshot: dict[str, Any],
+    frame: pd.DataFrame,
+    audit_config: dict[str, Any],
+    evaluated_at: datetime,
+) -> dict[str, Any] | None:
+    close = frame["close"].dropna().sort_index()
+    price_date = pd.Timestamp(snapshot.get("price_date"))
+    matches = np.flatnonzero(close.index == price_date)
+    if len(matches) == 0:
+        return None
+
+    windows = [int(value) for value in audit_config["observation_windows"]]
+    max_window = max(windows)
+    start_position = int(matches[-1])
+    if start_position + max_window >= len(close):
+        return None
+
+    full_window = close.iloc[start_position : start_position + max_window + 1]
+    start_price = safe_float(full_window.iloc[0])
+    if start_price <= 0:
+        return None
+    relative_moves = full_window / start_price - 1.0
+
+    outcome: dict[str, Any] = {
+        "schema_version": 1,
+        "symbol": snapshot.get("symbol"),
+        "asset_type": snapshot.get("asset_type"),
+        "prediction_date": snapshot.get("prediction_date"),
+        "prediction_timestamp_utc": snapshot.get("prediction_timestamp_utc"),
+        "price_date": snapshot.get("price_date"),
+        "evaluated_at_utc": evaluated_at.isoformat(),
+        "evaluation_price_date": close.index.max().strftime("%Y-%m-%d"),
+        "start_price": start_price,
+        "forward_path_days_available": max_window,
+    }
+
+    atr_14_pct = safe_float(
+        (snapshot.get("raw_indicators") or {}).get("atr_14_pct"),
+        safe_float(snapshot.get("atr_14_pct")),
+    )
+    for window in windows:
+        window_moves = relative_moves.iloc[: window + 1]
+        forward_return = safe_float(window_moves.iloc[-1])
+        max_drawdown = safe_float(window_moves.min())
+        max_rebound = safe_float(window_moves.max())
+        outcome[f"forward_return_{window}d"] = forward_return
+        outcome[f"forward_max_drawdown_{window}d"] = max_drawdown
+        outcome[f"forward_max_rebound_{window}d"] = max_rebound
+        outcome[f"forward_max_drawdown_{window}d_atr"] = (
+            safe_ratio(max_drawdown, atr_14_pct, 0.0) if atr_14_pct > 0 else None
+        )
+        outcome[f"forward_max_rebound_{window}d_atr"] = (
+            safe_ratio(max_rebound, atr_14_pct, 0.0) if atr_14_pct > 0 else None
+        )
+
+    min_date = relative_moves.idxmin()
+    max_date = relative_moves.idxmax()
+    outcome.update(
+        {
+            "forward_min_price_20d": safe_float(full_window.loc[min_date]),
+            "forward_max_price_20d": safe_float(full_window.loc[max_date]),
+            "forward_min_price_date_20d": pd.Timestamp(min_date).strftime("%Y-%m-%d"),
+            "forward_max_price_date_20d": pd.Timestamp(max_date).strftime("%Y-%m-%d"),
+            "atr_14_pct_at_prediction": atr_14_pct,
+        }
+    )
+
+    fixed_direction, fixed_date, fixed_value = first_threshold_cross(
+        relative_moves,
+        safe_float(audit_config["clear_rebound_threshold_pct"]),
+        safe_float(audit_config["clear_drawdown_threshold_pct"]),
+    )
+    outcome.update(
+        {
+            "first_clear_move_pct": fixed_direction,
+            "first_clear_move_pct_date": fixed_date,
+            "first_clear_move_pct_value": fixed_value,
+            "clear_rebound_threshold_pct": safe_float(
+                audit_config["clear_rebound_threshold_pct"]
+            ),
+            "clear_drawdown_threshold_pct": safe_float(
+                audit_config["clear_drawdown_threshold_pct"]
+            ),
+        }
+    )
+
+    if atr_14_pct > 0:
+        atr_moves = relative_moves / atr_14_pct
+        atr_direction, atr_date, atr_value = first_threshold_cross(
+            atr_moves,
+            safe_float(audit_config["clear_rebound_threshold_atr"]),
+            safe_float(audit_config["clear_drawdown_threshold_atr"]),
+        )
+    else:
+        atr_direction, atr_date, atr_value = "none", None, None
+    outcome.update(
+        {
+            "first_clear_move_atr": atr_direction,
+            "first_clear_move_atr_date": atr_date,
+            "first_clear_move_atr_value": atr_value,
+            "clear_rebound_threshold_atr": safe_float(
+                audit_config["clear_rebound_threshold_atr"]
+            ),
+            "clear_drawdown_threshold_atr": safe_float(
+                audit_config["clear_drawdown_threshold_atr"]
+            ),
+        }
+    )
+    return outcome
+
+
+def update_prediction_outcomes(
+    snapshots_path: Path,
+    outcomes_path: Path,
+    frames: dict[str, pd.DataFrame],
+    audit_config: dict[str, Any],
+    evaluated_at: datetime,
+) -> list[dict[str, Any]]:
+    existing_keys = {audit_record_key(row) for row in read_jsonl(outcomes_path)}
+    new_outcomes = []
+    for snapshot in read_jsonl(snapshots_path):
+        key = audit_record_key(snapshot)
+        if key in existing_keys:
+            continue
+        symbol = str(snapshot.get("symbol", ""))
+        frame = frames.get(symbol)
+        if frame is None:
+            continue
+        outcome = compute_forward_outcome(snapshot, frame, audit_config, evaluated_at)
+        if outcome is None:
+            continue
+        new_outcomes.append(outcome)
+        existing_keys.add(key)
+    append_jsonl(outcomes_path, new_outcomes)
+    return new_outcomes
+
+
 def save_history(
     signals: list[Signal],
     aggregate: dict[str, float],
@@ -1506,15 +1884,40 @@ def save_history(
     failures: list[FetchFailure] | None = None,
     risk_alerts: dict[str, RiskAlert] | None = None,
     market_stories: list[MarketStory] | None = None,
+    frames: dict[str, pd.DataFrame] | None = None,
+    portfolio_breadth: float = 0.0,
 ) -> Path:
     output_dir = Path(os.getenv("OUTPUT_DIR", "history"))
     output_dir.mkdir(parents=True, exist_ok=True)
-    date_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    prediction_timestamp = datetime.now(timezone.utc)
+    date_stamp = prediction_timestamp.strftime("%Y%m%dT%H%M%SZ")
     output_path = output_dir / f"result_{date_stamp}.json"
+    snapshots_path = output_dir / "prediction_snapshots.jsonl"
+    outcomes_path = output_dir / "prediction_outcomes.jsonl"
+    audit_config = load_audit_config()
+    snapshots = build_prediction_snapshots(
+        signals,
+        prediction_timestamp,
+        portfolio_breadth,
+        market_stories=market_stories,
+    )
+    append_jsonl(snapshots_path, snapshots)
+    new_outcomes = update_prediction_outcomes(
+        snapshots_path,
+        outcomes_path,
+        frames or {},
+        audit_config,
+        prediction_timestamp,
+    )
     payload = {
         "as_of": as_of,
         "aggregate_probabilities": aggregate,
         "signals": [asdict(signal) for signal in signals],
+        "portfolio_breadth": portfolio_breadth,
+        "prediction_snapshots_file": str(snapshots_path),
+        "prediction_outcomes_file": str(outcomes_path),
+        "new_prediction_snapshot_count": len(snapshots),
+        "new_prediction_outcome_count": len(new_outcomes),
         "risk_alerts": {
             ticker: asdict(alert) for ticker, alert in (risk_alerts or {}).items()
         },
@@ -1609,7 +2012,7 @@ def main() -> int:
     if not signals:
         raise RuntimeError("No valid ticker data available")
 
-    breadth = float(
+    portfolio_breadth = float(
         np.mean(
             [
                 signal.ma20_gap > 0
@@ -1617,7 +2020,7 @@ def main() -> int:
             ]
         )
     )
-    signals = [score_signal(signal, breadth) for signal in signals]
+    signals = [score_signal(signal, portfolio_breadth) for signal in signals]
     risk_alerts = {
         signal.ticker: calculate_risk_alert(signal, frames[signal.ticker])
         for signal in signals
@@ -1641,6 +2044,8 @@ def main() -> int:
         failures,
         risk_alerts=risk_alerts,
         market_stories=market_stories,
+        frames=frames,
+        portfolio_breadth=portfolio_breadth,
     )
     send_telegram(telegram_token, telegram_chat_id, report)
 
