@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,39 @@ STALE_PRICE_DAYS = 5
 DEFAULT_TICKERS = "MU,SNDK,WDC,STX"
 DEFAULT_ASSET_CONFIG = "assets.json"
 SUPPORTED_ASSET_TYPES = {"US_STOCK", "US_ETF", "CN_FUND", "CN_ETF"}
+TRADING_DAYS_PER_YEAR = 252
+RISK_LOOKBACK_DAYS = 120
+
+NEGATIVE_KEYWORDS = (
+    "下跌",
+    "回调",
+    "调整",
+    "风险",
+    "利空",
+    "减持",
+    "亏损",
+    "放缓",
+    "承压",
+    "监管",
+    "制裁",
+    "限制",
+    "大跌",
+    "跳水",
+)
+POSITIVE_KEYWORDS = (
+    "上涨",
+    "反弹",
+    "利好",
+    "增长",
+    "突破",
+    "创新高",
+    "扩产",
+    "订单",
+    "景气",
+    "回暖",
+    "超预期",
+    "修复",
+)
 
 
 @dataclass
@@ -79,6 +112,37 @@ class FetchFailure:
     ticker: str
     stage: str
     error: str
+
+
+@dataclass
+class RiskAlert:
+    ticker: str
+    level: str
+    direction: str
+    score: float
+    current_drawdown_60d: float
+    annual_vol_20d: float
+    annual_vol_60d: float
+    vol_ratio_20_60: float
+    downside_vol_20d: float
+    var_95_1d: float | None
+    cvar_95_1d: float | None
+    var_95_5d: float | None
+    cvar_95_5d: float | None
+    consecutive_down_days: int
+    sample_days: int
+    warnings: list[str]
+
+
+@dataclass
+class MarketStory:
+    symbol: str
+    title: str
+    url: str = ""
+    source: str = ""
+    published: str = ""
+    kind: str = "news"
+    sentiment: float = 0.0
 
 
 def env_required(name: str) -> str:
@@ -217,10 +281,115 @@ def is_safe_http_url(value: str) -> bool:
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+def safe_link(url: str, label: str) -> str:
+    if not is_safe_http_url(url):
+        return html.escape(label)
+    return f'<a href="{html.escape(url, quote=True)}">{html.escape(label)}</a>'
+
+
 def truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: max(0, limit - 1)].rstrip() + "…"
+
+
+def headline_sentiment(text: str) -> float:
+    positive = sum(1 for keyword in POSITIVE_KEYWORDS if keyword in text)
+    negative = sum(1 for keyword in NEGATIVE_KEYWORDS if keyword in text)
+    if positive == negative:
+        return 0.0
+    return float(np.clip((positive - negative) / 3.0, -1.0, 1.0))
+
+
+def sentiment_label(score: float) -> str:
+    if score >= 0.20:
+        return "偏正"
+    if score <= -0.20:
+        return "偏负"
+    return "中性"
+
+
+def theme_query(asset: Asset | Signal) -> str:
+    base = getattr(asset, "name_zh", "") or getattr(asset, "ticker", "") or getattr(
+        asset, "symbol", ""
+    )
+    symbol = getattr(asset, "symbol", getattr(asset, "ticker", ""))
+    if base and symbol and symbol not in base:
+        return f"{base} {symbol}"
+    return base or symbol
+
+
+def key_links_for_asset(asset: Asset | Signal) -> list[tuple[str, str]]:
+    symbol = getattr(asset, "symbol", getattr(asset, "ticker", ""))
+    asset_type = getattr(asset, "asset_type", "")
+    query = quote(theme_query(asset))
+    links: list[tuple[str, str]] = []
+    if asset_type in {"CN_ETF", "CN_FUND"}:
+        links.extend(
+            [
+                ("天天基金", f"https://fund.eastmoney.com/{symbol}.html"),
+                ("新闻", f"https://so.eastmoney.com/news/s?keyword={query}"),
+                ("股吧", f"https://guba.eastmoney.com/list,of{symbol}.html"),
+                ("雪球", f"https://xueqiu.com/k?q={query}"),
+            ]
+        )
+    elif uses_alpha_vantage(asset_type):
+        links.extend(
+            [
+                ("Yahoo", f"https://finance.yahoo.com/quote/{symbol}"),
+                ("新闻", f"https://www.google.com/search?q={quote(symbol + ' stock news')}"),
+            ]
+        )
+    return links
+
+
+def annualized_volatility(returns: pd.Series) -> float:
+    clean = returns.dropna()
+    if len(clean) < 2:
+        return 0.0
+    return safe_float(clean.std(ddof=0) * math.sqrt(TRADING_DAYS_PER_YEAR))
+
+
+def historical_var_cvar(returns: pd.Series, confidence: float = 0.95) -> tuple[float | None, float | None]:
+    clean = returns.dropna()
+    if len(clean) < RISK_LOOKBACK_DAYS:
+        return None, None
+    var_value = safe_float(clean.quantile(1.0 - confidence))
+    tail = clean[clean <= var_value]
+    if tail.empty:
+        return var_value, None
+    return var_value, safe_float(tail.mean())
+
+
+def consecutive_down_days(close: pd.Series) -> int:
+    diffs = close.diff().dropna()
+    count = 0
+    for value in reversed(diffs.tolist()):
+        if safe_float(value) < 0:
+            count += 1
+        else:
+            break
+    return count
+
+
+def risk_level(score: float) -> str:
+    if score >= 0.72:
+        return "高"
+    if score >= 0.55:
+        return "中高"
+    if score >= 0.38:
+        return "中"
+    return "低"
+
+
+def direction_label(signal: Signal) -> str:
+    if signal.ret_20d <= -0.08 and signal.ma20_gap <= -0.03:
+        return "明显偏弱"
+    if signal.ret_20d < 0 or signal.ma20_gap < 0:
+        return "转弱"
+    if signal.ret_20d > 0.05 and signal.ma20_gap > 0 and signal.rsi_14 >= 52:
+        return "偏强"
+    return "震荡"
 
 
 def alpha_get(params: dict[str, Any], api_key: str) -> dict[str, Any]:
@@ -471,6 +640,143 @@ def fetch_news(
     return summary, top_news
 
 
+def story_from_row(
+    row: pd.Series,
+    symbol: str,
+    kind: str,
+    title_candidates: tuple[str, ...],
+    url_candidates: tuple[str, ...],
+    source_candidates: tuple[str, ...],
+    published_candidates: tuple[str, ...],
+) -> MarketStory | None:
+    title_col = find_column(pd.DataFrame([row]), title_candidates)
+    if title_col is None:
+        return None
+    title = str(row.get(title_col, "")).strip()
+    if not title:
+        return None
+
+    url_col = find_column(pd.DataFrame([row]), url_candidates)
+    source_col = find_column(pd.DataFrame([row]), source_candidates)
+    published_col = find_column(pd.DataFrame([row]), published_candidates)
+    url = str(row.get(url_col, "")).strip() if url_col else ""
+    source = str(row.get(source_col, "")).strip() if source_col else ""
+    published = str(row.get(published_col, "")).strip() if published_col else ""
+    return MarketStory(
+        symbol=symbol,
+        title=title,
+        url=url if is_safe_http_url(url) else "",
+        source=source,
+        published=published,
+        kind=kind,
+        sentiment=headline_sentiment(title),
+    )
+
+
+def fetch_cn_asset_news(ak: Any, asset: Asset, limit: int = 2) -> list[MarketStory]:
+    if not hasattr(ak, "stock_news_em"):
+        return []
+    raw = ak.stock_news_em(symbol=asset.symbol)
+    if raw is None or raw.empty:
+        return []
+
+    stories: list[MarketStory] = []
+    for _, row in raw.head(max(limit * 3, limit)).iterrows():
+        story = story_from_row(
+            row,
+            asset.symbol,
+            "news",
+            title_candidates=("新闻标题", "标题", "title", "Title"),
+            url_candidates=("新闻链接", "链接", "url", "URL"),
+            source_candidates=("文章来源", "来源", "source", "Source"),
+            published_candidates=("发布时间", "时间", "日期", "date", "Date"),
+        )
+        if story:
+            stories.append(story)
+        if len(stories) >= limit:
+            break
+    return stories
+
+
+def row_matches_asset(row: pd.Series, asset: Asset) -> bool:
+    text = " ".join(str(value) for value in row.values if pd.notna(value))
+    candidates = {asset.symbol, asset.name_zh, asset.name_en}
+    candidates.update(part for part in asset.note.replace("，", " ").split() if len(part) >= 2)
+    return any(candidate and candidate in text for candidate in candidates)
+
+
+def fetch_cn_social_mentions(ak: Any, assets: list[Asset], limit: int = 6) -> list[MarketStory]:
+    stories: list[MarketStory] = []
+    for function_name in (
+        "stock_hot_rank_em",
+        "stock_hot_tweet_xq",
+        "stock_hot_follow_xq",
+        "stock_hot_deal_xq",
+    ):
+        function = getattr(ak, function_name, None)
+        if function is None:
+            continue
+
+        raw = None
+        for kwargs in ({}, {"symbol": "最热门"}):
+            try:
+                raw = function(**kwargs)
+                break
+            except TypeError:
+                continue
+            except Exception:
+                raw = None
+                break
+        if raw is None or getattr(raw, "empty", True):
+            continue
+
+        for _, row in raw.head(80).iterrows():
+            matched = next((asset for asset in assets if row_matches_asset(row, asset)), None)
+            if matched is None:
+                continue
+            story = story_from_row(
+                row,
+                matched.symbol,
+                "social",
+                title_candidates=("股票简称", "简称", "名称", "标题", "内容", "关注", "讨论", "symbol"),
+                url_candidates=("链接", "url", "URL"),
+                source_candidates=("来源", "平台", "source", "Source"),
+                published_candidates=("时间", "日期", "发布时间", "date", "Date"),
+            )
+            if story is None:
+                title = truncate_text(" ".join(str(value) for value in row.values if pd.notna(value)), 120)
+                story = MarketStory(
+                    symbol=matched.symbol,
+                    title=title,
+                    source=function_name,
+                    kind="social",
+                    sentiment=headline_sentiment(title),
+                )
+            stories.append(story)
+            if len(stories) >= limit:
+                return stories
+    return stories
+
+
+def fetch_cn_market_stories(assets: list[Asset]) -> list[MarketStory]:
+    cn_assets = [asset for asset in assets if asset.asset_type in {"CN_ETF", "CN_FUND"}]
+    if not cn_assets:
+        return []
+    ak = import_akshare()
+
+    stories: list[MarketStory] = []
+    for asset in cn_assets:
+        try:
+            stories.extend(fetch_cn_asset_news(ak, asset, limit=2))
+        except Exception:
+            continue
+    try:
+        stories.extend(fetch_cn_social_mentions(ak, cn_assets, limit=6))
+    except Exception:
+        pass
+    return stories[:16]
+
+
 def rsi(series: pd.Series, period: int = 14) -> float:
     delta = series.diff()
     gains = delta.clip(lower=0).rolling(period).mean()
@@ -628,6 +934,77 @@ def score_signal(signal: Signal, breadth: float) -> Signal:
     return signal
 
 
+def calculate_risk_alert(signal: Signal, frame: pd.DataFrame) -> RiskAlert:
+    close = frame["close"]
+    returns_1d = close.pct_change().dropna()
+    returns_5d = close.pct_change(5).dropna()
+    sample_days = len(returns_1d)
+
+    recent = close.iloc[-60:]
+    current_peak = float(recent.max())
+    current_drawdown = safe_ratio(float(close.iloc[-1]), current_peak, 1.0) - 1.0
+
+    vol_20 = annualized_volatility(returns_1d.iloc[-20:])
+    vol_60 = annualized_volatility(returns_1d.iloc[-60:])
+    downside_vol_20 = annualized_volatility(returns_1d.iloc[-20:].clip(upper=0))
+    vol_ratio = safe_ratio(vol_20, vol_60, 1.0) if vol_60 > 0 else 1.0
+
+    var_1d, cvar_1d = historical_var_cvar(returns_1d.iloc[-RISK_LOOKBACK_DAYS:])
+    var_5d, cvar_5d = historical_var_cvar(returns_5d.iloc[-RISK_LOOKBACK_DAYS:])
+
+    warnings: list[str] = []
+    if sample_days < RISK_LOOKBACK_DAYS:
+        warnings.append("样本不足，暂不估计CVaR")
+    if cvar_5d is not None and signal.ret_5d <= cvar_5d:
+        warnings.append("近5日跌幅进入历史尾部区间")
+    if signal.ma20_gap < 0 and signal.ret_20d < 0:
+        warnings.append("短期趋势转弱")
+    if vol_ratio >= 1.35:
+        warnings.append("20日波动率明显高于60日")
+    if signal.volume_ratio_5_20 >= 1.8:
+        warnings.append("成交量显著放大")
+    down_days = consecutive_down_days(close)
+    if down_days >= 3:
+        warnings.append(f"连续下跌{down_days}日")
+    if current_drawdown <= -0.12:
+        warnings.append("距离60日高点回撤较深")
+
+    cvar_component = (
+        clip01((-(cvar_5d or 0.0) - 0.04) / 0.10) if cvar_5d is not None else 0.35
+    )
+    score = float(
+        np.mean(
+            [
+                clip01(-signal.ret_20d / 0.12),
+                clip01(-current_drawdown / 0.18),
+                clip01((vol_ratio - 1.0) / 0.75),
+                clip01(downside_vol_20 / 0.45),
+                clip01((signal.volume_ratio_5_20 - 1.0) / 1.5),
+                cvar_component,
+            ]
+        )
+    )
+
+    return RiskAlert(
+        ticker=signal.ticker,
+        level=risk_level(score),
+        direction=direction_label(signal),
+        score=score,
+        current_drawdown_60d=current_drawdown,
+        annual_vol_20d=vol_20,
+        annual_vol_60d=vol_60,
+        vol_ratio_20_60=vol_ratio,
+        downside_vol_20d=downside_vol_20,
+        var_95_1d=var_1d,
+        cvar_95_1d=cvar_1d,
+        var_95_5d=var_5d,
+        cvar_95_5d=cvar_5d,
+        consecutive_down_days=down_days,
+        sample_days=sample_days,
+        warnings=warnings,
+    )
+
+
 def pct(value: float) -> str:
     return f"{value * 100:+.1f}%"
 
@@ -644,15 +1021,89 @@ def price_age_days(as_of: str) -> int | None:
     return (datetime.now(timezone.utc).date() - as_of_date).days
 
 
+def short_probability_line(probabilities: dict[str, float]) -> str:
+    labels = {
+        "全部卖出": "卖出",
+        "等待回弹后卖出或减仓": "等待",
+        "留下": "留下",
+    }
+    return " / ".join(
+        f"{labels.get(label, label)} {probability_pct(value)}"
+        for label, value in probabilities.items()
+    )
+
+
+def optional_pct(value: float | None) -> str:
+    if value is None:
+        return "样本不足"
+    return pct(value)
+
+
+def stories_by_symbol(stories: list[MarketStory]) -> dict[str, list[MarketStory]]:
+    grouped: dict[str, list[MarketStory]] = {}
+    for story in stories:
+        grouped.setdefault(story.symbol, []).append(story)
+    return grouped
+
+
+def story_sentiment_summary(stories: list[MarketStory]) -> str:
+    if not stories:
+        return "暂无可用新闻/热度数据"
+    score = float(np.mean([story.sentiment for story in stories]))
+    news_count = sum(1 for story in stories if story.kind == "news")
+    social_count = sum(1 for story in stories if story.kind == "social")
+    return (
+        f"{sentiment_label(score)} "
+        f"(新闻{news_count}条，热度{social_count}条，标题情绪{score:+.2f})"
+    )
+
+
+def us_market_summary(signals: list[Signal]) -> list[str]:
+    us_signals = [signal for signal in signals if uses_alpha_vantage(signal.asset_type)]
+    if not us_signals:
+        return []
+
+    growth_symbols = {"AIQ", "BOTZ", "SMH", "LIT", "MU", "SNDK", "WDC", "STX"}
+    defensive_symbols = {"SCHD"}
+    growth = [signal for signal in us_signals if signal.ticker in growth_symbols]
+    defensive = [signal for signal in us_signals if signal.ticker in defensive_symbols]
+    growth_ret20 = float(np.mean([signal.ret_20d for signal in growth])) if growth else 0.0
+    defensive_ret20 = (
+        float(np.mean([signal.ret_20d for signal in defensive])) if defensive else 0.0
+    )
+    breadth = float(np.mean([signal.ma20_gap > 0 for signal in us_signals]))
+    news_score = float(np.mean([signal.news_score for signal in us_signals]))
+    negative_ratio = float(np.mean([signal.negative_news_ratio for signal in us_signals]))
+
+    spread = growth_ret20 - defensive_ret20
+    if spread >= 0.03 and breadth >= 0.55:
+        appetite = "偏强"
+    elif spread <= -0.03 or breadth <= 0.35:
+        appetite = "偏弱"
+    else:
+        appetite = "中性"
+
+    return [
+        f"风险偏好：{appetite}",
+        f"成长/科技20日 {pct(growth_ret20)}，红利防御20日 {pct(defensive_ret20)}，相对强弱 {pct(spread)}",
+        f"站上MA20比例 {breadth * 100:.0f}%，新闻情绪 {news_score:+.2f}，负面新闻占比 {negative_ratio * 100:.0f}%",
+    ]
+
+
 def build_report(
     signals: list[Signal],
     top_news: list[dict[str, str]],
     as_of: str,
     failures: list[FetchFailure] | None = None,
+    risk_alerts: dict[str, RiskAlert] | None = None,
+    market_stories: list[MarketStory] | None = None,
 ) -> tuple[str, dict[str, float]]:
     if not signals:
         raise RuntimeError("No valid ticker signals to report")
 
+    risk_alerts = risk_alerts or {}
+    market_stories = market_stories or []
+    grouped_stories = stories_by_symbol(market_stories)
     aggregate = {
         label: float(np.mean([s.probabilities[label] for s in signals]))
         for label in signals[0].probabilities
@@ -663,16 +1114,13 @@ def build_report(
     overall = max(aggregate, key=aggregate.get)
 
     lines = [
-        "<b>投资风险周报</b>",
+        "<b>投资风险日报</b>",
         f"数据截至：{html.escape(as_of)}",
         "",
-        f"<b>总体判断：{html.escape(overall)}</b>",
-        " / ".join(
-            f"{html.escape(label)} {probability_pct(value)}"
-            for label, value in aggregate.items()
-        ),
+        f"<b>模型倾向：{html.escape(overall)}</b>",
+        "三分类参考概率：" + short_probability_line(aggregate),
+        "说明：这是风险监测和信息整理，不是自动交易指令。",
         "",
-        "<b>资产信号</b>",
     ]
 
     age_days = price_age_days(as_of)
@@ -680,13 +1128,78 @@ def build_report(
         lines.insert(3, f"注意：最新价格数据距今天 {age_days} 天，可能包含非交易日延迟。")
         lines.insert(4, "")
 
+    us_summary = us_market_summary(signals)
+    if us_summary:
+        lines.append("<b>美股大方向</b>")
+        lines.extend(us_summary)
+        lines.append("")
+
+    cn_signals = [signal for signal in signals if signal.asset_type in {"CN_ETF", "CN_FUND"}]
+    if cn_signals:
+        lines.append("<b>中国ETF/基金风险预警</b>")
+    for signal in cn_signals:
+        alert = risk_alerts.get(signal.ticker)
+        stories = grouped_stories.get(signal.ticker, [])
+        links = " / ".join(
+            safe_link(url, label) for label, url in key_links_for_asset(signal)
+        )
+        if alert:
+            warning_text = "；".join(alert.warnings[:3]) if alert.warnings else "暂无明显极端预警"
+            lines.extend(
+                [
+                    (
+                        f"<b>{html.escape(signal.display_name())}</b> "
+                        f"预警 {html.escape(alert.level)} / 走向 {html.escape(alert.direction)}"
+                    ),
+                    (
+                        f"价格：5日 {pct(signal.ret_5d)} / 20日 {pct(signal.ret_20d)} / "
+                        f"当前回撤 {pct(alert.current_drawdown_60d)} / RSI {signal.rsi_14:.1f}"
+                    ),
+                    (
+                        f"风险：CVaR95(5日) {optional_pct(alert.cvar_95_5d)} / "
+                        f"20日波动 {pct(alert.annual_vol_20d)} / "
+                        f"波动放大 {alert.vol_ratio_20_60:.2f}x"
+                    ),
+                    f"新闻/热度：{html.escape(story_sentiment_summary(stories))}",
+                    f"预警依据：{html.escape(warning_text)}",
+                    f"关键链接：{links}",
+                    "",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"<b>{html.escape(signal.display_name())}</b>",
+                    f"价格：5日 {pct(signal.ret_5d)} / 20日 {pct(signal.ret_20d)} / RSI {signal.rsi_14:.1f}",
+                    f"新闻/热度：{html.escape(story_sentiment_summary(stories))}",
+                    f"关键链接：{links}",
+                    "",
+                ]
+            )
+
+    if market_stories:
+        lines.append("<b>中国新闻/热度摘录</b>")
+        for story in market_stories[:8]:
+            title = html.escape(truncate_text(story.title, 180))
+            source = html.escape(truncate_text(story.source or story.kind, 60))
+            label = "新闻" if story.kind == "news" else "热度"
+            if story.url and is_safe_http_url(story.url):
+                lines.append(
+                    f'- [{html.escape(story.symbol)} {label}] '
+                    f'<a href="{html.escape(story.url, quote=True)}">{title}</a>  {source}'
+                )
+            else:
+                lines.append(f"- [{html.escape(story.symbol)} {label}] {title}  {source}")
+        lines.append("")
+
+    lines.append("<b>单资产三分类参考</b>")
     for signal in signals:
         probabilities = signal.probabilities or {}
         lines.extend(
             [
                 (
                     f"<b>{html.escape(signal.display_name())}</b>  "
-                    f"{html.escape(signal.recommendation)}"
+                    f"倾向 {html.escape(signal.recommendation)}"
                 ),
                 (
                     f"{html.escape(asset_type_label(signal.asset_type))} / "
@@ -702,10 +1215,7 @@ def build_report(
                     f"60日最大回撤 {pct(signal.drawdown_60d)} / "
                     f"新闻情绪 {signal.news_score:+.2f}"
                 ),
-                " / ".join(
-                    f"{html.escape(label)} {probability_pct(value)}"
-                    for label, value in probabilities.items()
-                ),
+                short_probability_line(probabilities),
             ]
         )
         if signal.note:
@@ -713,7 +1223,7 @@ def build_report(
         lines.append("")
 
     if top_news:
-        lines.append("<b>本周主要新闻</b>")
+        lines.append("<b>美股最新新闻</b>")
         for item in top_news[:4]:
             title = html.escape(truncate_text(item["title"], 240))
             source = html.escape(truncate_text(item["source"], 80))
@@ -742,7 +1252,8 @@ def build_report(
         [
             "<b>解释</b>",
             "概率来自透明规则评分和 Softmax 转换，尚未经过个人持仓约束和历史概率校准。",
-            "基金/ETF 暂沿用同一价格趋势框架；新闻情绪仅对支持的美股和美股ETF启用。",
+            "中国ETF/基金预警使用趋势、回撤、波动、VaR/CVaR、成交量和新闻/热度链接做辅助判断。",
+            "新闻和社交热度只作为解释层，暂不改变三分类评分权重和阈值。",
             "用于风险监测，不构成自动交易指令。",
         ]
     )
@@ -811,6 +1322,8 @@ def save_history(
     top_news: list[dict[str, str]],
     as_of: str,
     failures: list[FetchFailure] | None = None,
+    risk_alerts: dict[str, RiskAlert] | None = None,
+    market_stories: list[MarketStory] | None = None,
 ) -> Path:
     output_dir = Path(os.getenv("OUTPUT_DIR", "history"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -820,7 +1333,11 @@ def save_history(
         "as_of": as_of,
         "aggregate_probabilities": aggregate,
         "signals": [asdict(signal) for signal in signals],
+        "risk_alerts": {
+            ticker: asdict(alert) for ticker, alert in (risk_alerts or {}).items()
+        },
         "top_news": top_news,
+        "market_stories": [asdict(story) for story in (market_stories or [])],
         "failures": [asdict(failure) for failure in (failures or [])],
     }
     output_path.write_text(
@@ -860,6 +1377,18 @@ def main() -> int:
         )
         news_summary = neutral_news_summary(news_symbols)
         top_news = []
+
+    try:
+        market_stories = fetch_cn_market_stories(assets)
+    except Exception as exc:
+        failures.append(
+            FetchFailure(
+                ticker="CN",
+                stage="market_context",
+                error=sanitize_error_message(exc, api_key),
+            )
+        )
+        market_stories = []
 
     signals: list[Signal] = []
     frames: dict[str, pd.DataFrame] = {}
@@ -907,10 +1436,30 @@ def main() -> int:
         )
     )
     signals = [score_signal(signal, breadth) for signal in signals]
+    risk_alerts = {
+        signal.ticker: calculate_risk_alert(signal, frames[signal.ticker])
+        for signal in signals
+        if signal.ticker in frames and signal.asset_type in {"CN_ETF", "CN_FUND"}
+    }
 
     as_of = max(frame.index.max() for frame in frames.values()).strftime("%Y-%m-%d")
-    report, aggregate = build_report(signals, top_news, as_of, failures)
-    output_path = save_history(signals, aggregate, top_news, as_of, failures)
+    report, aggregate = build_report(
+        signals,
+        top_news,
+        as_of,
+        failures,
+        risk_alerts=risk_alerts,
+        market_stories=market_stories,
+    )
+    output_path = save_history(
+        signals,
+        aggregate,
+        top_news,
+        as_of,
+        failures,
+        risk_alerts=risk_alerts,
+        market_stories=market_stories,
+    )
     send_telegram(telegram_token, telegram_chat_id, report)
 
     print(report)

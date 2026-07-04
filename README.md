@@ -1,12 +1,12 @@
 # Invest Risk Monitor
 
-每周自动抓取资产价格和新闻情绪，输出三类风险判断，并通过 Telegram 推送：
+工作日自动抓取资产价格、新闻情绪和中国 ETF 风险因子，输出三类风险参考概率，并通过 Telegram 推送：
 
 1. 全部卖出
 2. 等待回弹后卖出或减仓
 3. 留下
 
-当前版本是透明规则原型：它把价格趋势、回撤、均线、RSI、成交量和新闻情绪映射为相对概率。概率尚未经过历史样本校准，不构成自动交易指令。
+当前版本是透明规则原型：它把价格趋势、回撤、均线、RSI、成交量和新闻情绪映射为相对概率，并额外为中国 ETF/基金生成 VaR/CVaR、波动和回撤预警。概率尚未经过历史样本校准，不构成自动交易指令。
 
 ## 数据流
 
@@ -14,8 +14,9 @@
 2. 美股和美股 ETF 价格来自 Alpha Vantage `TIME_SERIES_DAILY`。
 3. 美股和美股 ETF 新闻情绪来自 Alpha Vantage `NEWS_SENTIMENT`。
 4. 中国开放式基金和中国 ETF 价格来自 akshare。
-5. `monitor.py` 计算三分类概率，生成 Telegram HTML 报告。
-6. GitHub Actions 每周运行一次，并把快照写入 `history/`。
+5. 中国 ETF/基金额外计算 20/60 日波动、VaR/CVaR、连续下跌、成交量放大和当前回撤。
+6. `monitor.py` 生成 Telegram HTML 日报，包含美股大方向、中国 ETF 风险预警、关键链接和三分类参考概率。
+7. GitHub Actions 在工作日美股收盘后运行，并把快照写入 `history/` artifact。
 
 ## 默认资产
 
@@ -67,9 +68,9 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 然后到 `Actions` 页面运行：
 
 - `Test Telegram delivery`：只测试 Telegram 是否能收到消息
-- `Weekly memory-stock risk monitor`：正式运行监控
+- `Daily investment risk monitor`：正式运行监控
 
-默认计划任务是每周一 `08:37 America/Los_Angeles` 运行。GitHub 计划任务可能延迟几分钟，这是正常现象。
+默认计划任务是 UTC 周二到周六 `00:30` 运行，约等于美股前一交易日收盘后的晚间，也通常是北京时间早上。GitHub 计划任务可能延迟几分钟，这是正常现象。
 
 ## 资产配置格式
 
@@ -106,5 +107,17 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 - `留下` 更重视趋势仍在均线上方、新闻风险较低和正向动量。
 
 当前没有自动交易功能，也不会读取个人持仓、成本价、税务或资金约束。后续若要调整权重和阈值，应先做回测和概率校准。
+
+## 中国 ETF 风险预警
+
+中国 ETF/基金会额外生成一个不改变三分类概率的风险预警层：
+
+- `VaR95` / `CVaR95`：基于历史收益的 95% 分位尾部风险，样本不足时不会强行估计。
+- `20日/60日年化波动率`：观察短期波动是否明显放大。
+- `当前60日回撤`：衡量距离近期高点的跌幅。
+- `连续下跌天数` 和 `成交量放大`：用于识别短期风险释放或情绪拥挤。
+- `关键链接`：天天基金、东方财富新闻、股吧和雪球搜索，方便人工复核。
+
+这些预警只作为解释层，暂时不改变 `全部卖出`、`等待回弹后卖出或减仓`、`留下` 的定义、权重和阈值。
 
 更多 Telegram 和资产扩展说明见 `docs/telegram_and_assets.md`。

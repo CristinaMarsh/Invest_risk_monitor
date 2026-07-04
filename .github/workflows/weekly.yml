@@ -1,10 +1,11 @@
-name: Weekly memory-stock risk monitor
+name: Daily investment risk monitor
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "37 8 * * 1"
-      timezone: "America/Los_Angeles"
+    # UTC Tue-Sat 00:30 = US market evening after the previous trading day.
+    # It is usually Beijing morning, which is convenient for reading the report.
+    - cron: "30 0 * * 2-6"
 
 permissions:
   contents: read
@@ -12,7 +13,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository

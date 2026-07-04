@@ -124,6 +124,93 @@ def test_report_includes_asset_translation_and_note():
     assert "注：存储芯片厂商" in report
 
 
+def test_risk_alert_includes_cvar_when_history_is_sufficient():
+    dates = pd.bdate_range(end="2026-07-02", periods=180)
+    close = pd.Series(np.linspace(1.2, 1.0, len(dates)), index=dates)
+    close.iloc[40] *= 0.90
+    close.iloc[90] *= 0.88
+    frame = pd.DataFrame(
+        {
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": np.linspace(100_000, 220_000, len(dates)),
+        },
+        index=dates,
+    )
+    asset = monitor.Asset(symbol="512480", asset_type="CN_ETF", name_zh="半导体ETF")
+    signal = score_signal(
+        monitor.calculate_signal("512480", frame, monitor.neutral_news_summary(["512480"])["512480"], asset),
+        breadth=0.5,
+    )
+
+    alert = monitor.calculate_risk_alert(signal, frame)
+
+    assert alert.cvar_95_1d is not None
+    assert alert.cvar_95_5d is not None
+    assert alert.cvar_95_1d < 0
+    assert alert.level in {"低", "中", "中高", "高"}
+
+
+def test_report_includes_cn_risk_alert_and_key_links():
+    signal = score_signal(
+        make_signal(
+            ticker="512480",
+            asset_type="CN_ETF",
+            name_zh="半导体ETF国联安",
+            name_en="GTJA-Allianz CSI Semiconductor ETF",
+            ret_5d=-0.06,
+            ret_20d=-0.08,
+            ma20_gap=-0.04,
+            price_as_of="2026-07-02",
+        ),
+        breadth=0.5,
+    )
+    alert = monitor.RiskAlert(
+        ticker="512480",
+        level="中高",
+        direction="转弱",
+        score=0.62,
+        current_drawdown_60d=-0.12,
+        annual_vol_20d=0.32,
+        annual_vol_60d=0.24,
+        vol_ratio_20_60=1.33,
+        downside_vol_20d=0.20,
+        var_95_1d=-0.03,
+        cvar_95_1d=-0.04,
+        var_95_5d=-0.08,
+        cvar_95_5d=-0.10,
+        consecutive_down_days=3,
+        sample_days=160,
+        warnings=["近5日跌幅进入历史尾部区间"],
+    )
+    stories = [
+        monitor.MarketStory(
+            symbol="512480",
+            title="半导体板块反弹",
+            url="https://example.com/news",
+            source="测试新闻",
+            kind="news",
+            sentiment=0.4,
+        )
+    ]
+
+    report, _ = monitor.build_report(
+        [signal],
+        [],
+        "2026-07-02",
+        risk_alerts={"512480": alert},
+        market_stories=stories,
+    )
+
+    assert "中国ETF/基金风险预警" in report
+    assert "CVaR95(5日)" in report
+    assert "关键链接" in report
+    assert "fund.eastmoney.com/512480.html" in report
+    assert "半导体板块反弹" in report
+
+
 def test_load_assets_reads_enabled_config(tmp_path):
     config = tmp_path / "assets.json"
     config.write_text(
