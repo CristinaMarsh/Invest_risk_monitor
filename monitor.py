@@ -19,6 +19,7 @@ import requests
 
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 EASTMONEY_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+SINA_KLINE_URL = "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData"
 TELEGRAM_URL = "https://api.telegram.org/bot{token}/{method}"
 TIMEOUT = 30
 TELEGRAM_MESSAGE_LIMIT = 4096
@@ -544,6 +545,59 @@ def eastmoney_market_prefix(symbol: str) -> str:
     return "0"
 
 
+def sina_market_symbol(symbol: str) -> str:
+    prefix = "sh" if symbol.startswith(("5", "6", "9")) else "sz"
+    return f"{prefix}{symbol}"
+
+
+def fetch_cn_etf_daily_sina(symbol: str) -> pd.DataFrame:
+    params = {
+        "symbol": sina_market_symbol(symbol),
+        "scale": "240",
+        "ma": "no",
+        "datalen": "1500",
+    }
+    last_error: Exception | None = None
+    response = None
+    for attempt in range(3):
+        try:
+            response = requests.get(SINA_KLINE_URL, params=params, timeout=TIMEOUT)
+            if response.status_code < 500:
+                break
+            last_error = RuntimeError(f"Sina HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+
+    if response is None:
+        raise RuntimeError(f"Sina request failed for {symbol}: {last_error}")
+    if response.status_code >= 400:
+        raise RuntimeError(f"Sina HTTP {response.status_code} for {symbol}")
+    try:
+        raw = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"Sina returned invalid JSON for {symbol}") from exc
+    if not raw:
+        raise RuntimeError(f"No Sina ETF daily history returned for {symbol}")
+    frame = pd.DataFrame(raw).rename(
+        columns={
+            "day": "日期",
+            "open": "开盘",
+            "high": "最高",
+            "low": "最低",
+            "close": "收盘",
+            "volume": "成交量",
+        }
+    )
+    return normalize_price_frame(
+        frame,
+        symbol,
+        date_candidates=("日期", "date"),
+        close_candidates=("收盘", "close"),
+    )
+
+
 def fetch_cn_etf_daily_eastmoney(symbol: str) -> pd.DataFrame:
     end_date = datetime.now(timezone.utc).strftime("%Y%m%d")
     params = {
@@ -618,6 +672,7 @@ def fetch_cn_etf_daily_eastmoney(symbol: str) -> pd.DataFrame:
 
 
 def fetch_cn_etf_daily(symbol: str) -> pd.DataFrame:
+    errors: list[str] = []
     try:
         ak = import_akshare()
         end_date = datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -635,13 +690,16 @@ def fetch_cn_etf_daily(symbol: str) -> pd.DataFrame:
             close_candidates=("收盘", "close"),
         )
     except Exception as akshare_error:
-        try:
-            return fetch_cn_etf_daily_eastmoney(symbol)
-        except Exception as eastmoney_error:
-            raise RuntimeError(
-                f"akshare ETF history failed: {akshare_error}; "
-                f"EastMoney fallback failed: {eastmoney_error}"
-            ) from eastmoney_error
+        errors.append(f"akshare failed: {akshare_error}")
+    try:
+        return fetch_cn_etf_daily_eastmoney(symbol)
+    except Exception as eastmoney_error:
+        errors.append(f"EastMoney failed: {eastmoney_error}")
+    try:
+        return fetch_cn_etf_daily_sina(symbol)
+    except Exception as sina_error:
+        errors.append(f"Sina failed: {sina_error}")
+        raise RuntimeError("; ".join(errors)) from sina_error
 
 
 def fetch_asset_daily(asset: Asset, api_key: str | None) -> pd.DataFrame:

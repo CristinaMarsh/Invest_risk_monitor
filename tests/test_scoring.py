@@ -282,6 +282,52 @@ def test_cn_etf_daily_falls_back_to_eastmoney(monkeypatch):
     assert frame["volume"].iloc[-1] > 100000
 
 
+def test_cn_etf_daily_falls_back_to_sina(monkeypatch):
+    class FakeEastMoneyResponse:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    class FakeSinaResponse:
+        status_code = 200
+
+        def json(self):
+            dates = pd.bdate_range(end="2026-07-02", periods=70)
+            return [
+                {
+                    "day": date.strftime("%Y-%m-%d"),
+                    "open": f"{1 + idx / 100:.3f}",
+                    "high": f"{1 + idx / 80:.3f}",
+                    "low": f"{1 + idx / 110:.3f}",
+                    "close": f"{1 + idx / 90:.3f}",
+                    "volume": str(100000 + idx),
+                }
+                for idx, date in enumerate(dates)
+            ]
+
+    fake_akshare = SimpleNamespace(
+        fund_etf_hist_em=lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("akshare disconnected")
+        )
+    )
+
+    def fake_get(url, *args, **kwargs):
+        if url == monitor.EASTMONEY_KLINE_URL:
+            return FakeEastMoneyResponse()
+        return FakeSinaResponse()
+
+    monkeypatch.setattr(monitor, "import_akshare", lambda: fake_akshare)
+    monkeypatch.setattr(monitor.requests, "get", fake_get)
+    monkeypatch.setattr(monitor.time, "sleep", lambda seconds: None)
+
+    frame = monitor.fetch_cn_etf_daily("159770")
+
+    assert len(frame) == 70
+    assert frame["close"].iloc[-1] > frame["close"].iloc[0]
+    assert frame["volume"].iloc[-1] > 100000
+
+
 def test_main_continues_when_one_ticker_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "dummy-alpha")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "dummy-telegram")
