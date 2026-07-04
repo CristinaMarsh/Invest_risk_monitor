@@ -16,7 +16,7 @@
 4. 中国开放式基金和中国 ETF 价格来自 akshare。
 5. 中国 ETF/基金额外计算 20/60 日波动、VaR/CVaR、连续下跌、成交量放大和当前回撤。
 6. `monitor.py` 生成 Telegram HTML 日报，包含美股大方向、中国 ETF 风险预警、关键链接和三分类参考概率。
-7. GitHub Actions 在工作日美股收盘后运行，并把快照写入 `history/` artifact。
+7. GitHub Actions 在北京时间周一到周六早上运行，并把快照写入 `history/` artifact。
 
 ## 默认资产
 
@@ -70,7 +70,7 @@ Settings -> Secrets and variables -> Actions -> New repository secret
 - `Test Telegram delivery`：只测试 Telegram 是否能收到消息
 - `Daily investment risk monitor`：正式运行监控
 
-默认计划任务是 UTC 周二到周六 `00:30` 运行，约等于美股前一交易日收盘后的晚间，也通常是北京时间早上。GitHub 计划任务可能延迟几分钟，这是正常现象。
+默认计划任务是 UTC 周一到周六 `00:30` 运行，也就是北京时间周一到周六 `08:30` 左右。周二到周六覆盖上一美股交易日，周一用于 A 股开盘前检查周末新闻和中国 ETF 风险。GitHub 计划任务可能延迟几分钟，这是正常现象。
 
 ## 资产配置格式
 

@@ -3,9 +3,9 @@ name: Daily investment risk monitor
 on:
   workflow_dispatch:
   schedule:
-    # UTC Tue-Sat 00:30 = US market evening after the previous trading day.
-    # It is usually Beijing morning, which is convenient for reading the report.
-    - cron: "30 0 * * 2-6"
+    # UTC Mon-Sat 00:30 = Beijing Mon-Sat 08:30.
+    # Tue-Sat covers the prior US session; Monday adds a China pre-open weekend check.
+    - cron: "30 0 * * 1-6"
 
 permissions:
   contents: read
