@@ -328,6 +328,57 @@ def test_cn_etf_daily_falls_back_to_sina(monkeypatch):
     assert frame["volume"].iloc[-1] > 100000
 
 
+def test_sina_fallback_back_adjusts_split_like_jumps(monkeypatch):
+    class FakeEastMoneyResponse:
+        status_code = 500
+
+        def json(self):
+            return {}
+
+    class FakeSinaResponse:
+        status_code = 200
+
+        def json(self):
+            dates = pd.bdate_range(end="2026-07-02", periods=70)
+            rows = []
+            for idx, date in enumerate(dates):
+                base_close = 2.0 + idx * 0.002
+                split_factor = 1.0 if idx < 60 else 0.5
+                close = base_close * split_factor
+                rows.append(
+                    {
+                        "day": date.strftime("%Y-%m-%d"),
+                        "open": f"{close * 0.998:.3f}",
+                        "high": f"{close * 1.004:.3f}",
+                        "low": f"{close * 0.996:.3f}",
+                        "close": f"{close:.3f}",
+                        "volume": str(int((100000 + idx) / split_factor)),
+                    }
+                )
+            return rows
+
+    fake_akshare = SimpleNamespace(
+        fund_etf_hist_em=lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("akshare disconnected")
+        )
+    )
+
+    def fake_get(url, *args, **kwargs):
+        if url == monitor.EASTMONEY_KLINE_URL:
+            return FakeEastMoneyResponse()
+        return FakeSinaResponse()
+
+    monkeypatch.setattr(monitor, "import_akshare", lambda: fake_akshare)
+    monkeypatch.setattr(monitor.requests, "get", fake_get)
+    monkeypatch.setattr(monitor.time, "sleep", lambda seconds: None)
+
+    frame = monitor.fetch_cn_etf_daily("512480")
+    returns = frame["close"].pct_change().dropna()
+
+    assert returns.min() > -0.05
+    assert abs(frame["close"].iloc[60] / frame["close"].iloc[59] - 1.0) < 0.01
+
+
 def test_main_continues_when_one_ticker_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "dummy-alpha")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "dummy-telegram")

@@ -30,6 +30,7 @@ DEFAULT_ASSET_CONFIG = "assets.json"
 SUPPORTED_ASSET_TYPES = {"US_STOCK", "US_ETF", "CN_FUND", "CN_ETF"}
 TRADING_DAYS_PER_YEAR = 252
 RISK_LOOKBACK_DAYS = 120
+SPLIT_LIKE_JUMP_THRESHOLD = 0.30
 
 NEGATIVE_KEYWORDS = (
     "下跌",
@@ -528,6 +529,39 @@ def normalize_price_frame(
     return frame
 
 
+def back_adjust_split_like_jumps(
+    frame: pd.DataFrame,
+    threshold: float = SPLIT_LIKE_JUMP_THRESHOLD,
+) -> pd.DataFrame:
+    if frame.empty or "close" not in frame:
+        return frame
+
+    adjusted = frame.copy()
+    price_columns = [
+        column for column in ("open", "high", "low", "close") if column in adjusted.columns
+    ]
+    volume_columns = [column for column in ("volume",) if column in adjusted.columns]
+    if not price_columns:
+        return adjusted
+
+    for position in range(1, len(adjusted)):
+        previous_close = float(adjusted["close"].iloc[position - 1])
+        current_close = float(adjusted["close"].iloc[position])
+        if previous_close <= 0 or current_close <= 0:
+            continue
+        ratio = current_close / previous_close
+        if not math.isfinite(ratio) or ratio <= 0:
+            continue
+        if abs(ratio - 1.0) < threshold:
+            continue
+
+        adjusted.iloc[:position, adjusted.columns.get_indexer(price_columns)] *= ratio
+        if volume_columns:
+            adjusted.iloc[:position, adjusted.columns.get_indexer(volume_columns)] /= ratio
+
+    return adjusted
+
+
 def fetch_cn_fund_daily(symbol: str) -> pd.DataFrame:
     ak = import_akshare()
     raw = ak.fund_open_fund_info_em(symbol=symbol, indicator="单位净值走势")
@@ -590,12 +624,13 @@ def fetch_cn_etf_daily_sina(symbol: str) -> pd.DataFrame:
             "volume": "成交量",
         }
     )
-    return normalize_price_frame(
+    normalized = normalize_price_frame(
         frame,
         symbol,
         date_candidates=("日期", "date"),
         close_candidates=("收盘", "close"),
     )
+    return back_adjust_split_like_jumps(normalized)
 
 
 def fetch_cn_etf_daily_eastmoney(symbol: str) -> pd.DataFrame:
