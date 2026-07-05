@@ -89,7 +89,7 @@ def test_oversold_case_prefers_waiting_over_holding():
         ),
         portfolio_breadth=0.25,
     )
-    assert result.probabilities["??????????"] > result.probabilities["??"]
+    assert result.probabilities["等待回弹后卖出或减仓"] > result.probabilities["留下"]
 
 
 def test_positive_case_prefers_holding():
@@ -108,7 +108,7 @@ def test_positive_case_prefers_holding():
         ),
         portfolio_breadth=0.75,
     )
-    assert result.recommendation == "??"
+    assert result.recommendation == "留下"
 
 
 def test_empty_news_feed_uses_neutral_scores(monkeypatch):
@@ -151,9 +151,9 @@ def test_report_does_not_link_invalid_news_url():
 def test_report_includes_asset_translation_and_note():
     signal = score_signal(
         make_signal(
-            name_zh="????",
+            name_zh="美光科技",
             name_en="Micron Technology",
-            note="??????,??? DRAM/NAND ???",
+            note="存储芯片厂商，主要看 DRAM/NAND 周期。",
             price_as_of="2026-07-02",
         ),
         portfolio_breadth=0.5,
@@ -161,10 +161,10 @@ def test_report_includes_asset_translation_and_note():
 
     report, _ = monitor.build_report([signal], [], "2026-07-02")
 
-    assert "???? (TEST, Micron Technology)" in report
-    assert "?:??????" in report
-    assert "????????" in report
-    assert "?????????" in report
+    assert "美光科技 (TEST, Micron Technology)" in report
+    assert "注：存储芯片厂商" in report
+    assert "未校准的相对倾向" in report
+    assert "不代表真实发生概率" in report
 
 
 def test_risk_alert_includes_cvar_when_history_is_sufficient():
@@ -182,7 +182,7 @@ def test_risk_alert_includes_cvar_when_history_is_sufficient():
         },
         index=dates,
     )
-    asset = monitor.Asset(symbol="512480", asset_type="CN_ETF", name_zh="???ETF")
+    asset = monitor.Asset(symbol="512480", asset_type="CN_ETF", name_zh="半导体ETF")
     signal = score_signal(
         monitor.calculate_signal("512480", frame, monitor.neutral_news_summary(["512480"])["512480"], asset),
         portfolio_breadth=0.5,
@@ -193,7 +193,7 @@ def test_risk_alert_includes_cvar_when_history_is_sufficient():
     assert alert.cvar_95_1d is not None
     assert alert.cvar_95_5d is not None
     assert alert.cvar_95_1d < 0
-    assert alert.level in {"?", "?", "??", "?"}
+    assert alert.level in {"低", "中", "中高", "高"}
 
 
 def test_report_includes_cn_risk_alert_and_key_links():
@@ -201,7 +201,7 @@ def test_report_includes_cn_risk_alert_and_key_links():
         make_signal(
             ticker="512480",
             asset_type="CN_ETF",
-            name_zh="???ETF???",
+            name_zh="半导体ETF国联安",
             name_en="GTJA-Allianz CSI Semiconductor ETF",
             ret_5d=-0.06,
             ret_20d=-0.08,
@@ -212,8 +212,8 @@ def test_report_includes_cn_risk_alert_and_key_links():
     )
     alert = monitor.RiskAlert(
         ticker="512480",
-        level="??",
-        direction="??",
+        level="中高",
+        direction="转弱",
         score=0.62,
         current_drawdown_60d=-0.12,
         annual_vol_20d=0.32,
@@ -226,14 +226,14 @@ def test_report_includes_cn_risk_alert_and_key_links():
         cvar_95_5d=-0.10,
         consecutive_down_days=3,
         sample_days=160,
-        warnings=["?5???????????"],
+        warnings=["近5日跌幅进入历史尾部区间"],
     )
     stories = [
         monitor.MarketStory(
             symbol="512480",
-            title="???????",
+            title="半导体板块反弹",
             url="https://example.com/news",
-            source="????",
+            source="测试新闻",
             kind="news",
             sentiment=0.4,
         )
@@ -247,11 +247,11 @@ def test_report_includes_cn_risk_alert_and_key_links():
         market_stories=stories,
     )
 
-    assert "??ETF/??????" in report
-    assert "CVaR95(5?)" in report
-    assert "????" in report
+    assert "中国ETF/基金风险预警" in report
+    assert "CVaR95(5日)" in report
+    assert "关键链接" in report
     assert "fund.eastmoney.com/512480.html" in report
-    assert "???????" in report
+    assert "半导体板块反弹" in report
 
 
 def test_load_assets_reads_enabled_config(tmp_path):
@@ -280,8 +280,8 @@ def test_cn_fund_daily_normalizes_akshare_nav(monkeypatch):
     dates = pd.bdate_range(end="2026-07-02", periods=70)
     raw = pd.DataFrame(
         {
-            "????": dates.strftime("%Y-%m-%d"),
-            "????": np.linspace(1.0, 1.2, len(dates)),
+            "净值日期": dates.strftime("%Y-%m-%d"),
+            "单位净值": np.linspace(1.0, 1.2, len(dates)),
         }
     )
     fake_akshare = SimpleNamespace(
@@ -425,7 +425,7 @@ def test_sina_fallback_back_adjusts_split_like_jumps(monkeypatch):
 def test_prediction_snapshot_and_forward_outcome_are_structured():
     full_frame = make_price_frame(periods=120)
     prediction_frame = full_frame.iloc[:90]
-    asset = monitor.Asset(symbol="MU", asset_type="US_STOCK", name_zh="????")
+    asset = monitor.Asset(symbol="MU", asset_type="US_STOCK", name_zh="美光科技")
     signal = score_signal(
         monitor.calculate_signal(
             "MU",
