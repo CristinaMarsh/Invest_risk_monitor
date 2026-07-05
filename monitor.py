@@ -100,6 +100,7 @@ class Signal:
     negative_news_ratio: float
     news_count: int = 0
     atr_14_pct: float = 0.0
+    adjusted_close: float = 0.0
     asset_type: str = "US_STOCK"
     name_zh: str = ""
     name_en: str = ""
@@ -442,7 +443,7 @@ def alpha_get(params: dict[str, Any], api_key: str) -> dict[str, Any]:
 def fetch_daily(ticker: str, api_key: str) -> pd.DataFrame:
     data = alpha_get(
         {
-            "function": "TIME_SERIES_DAILY",
+            "function": "TIME_SERIES_DAILY_ADJUSTED",
             "symbol": ticker,
             "outputsize": "compact",
         },
@@ -461,7 +462,14 @@ def fetch_daily(ticker: str, api_key: str) -> pd.DataFrame:
                 "high": safe_float(values.get("2. high")),
                 "low": safe_float(values.get("3. low")),
                 "close": safe_float(values.get("4. close")),
-                "volume": safe_float(values.get("5. volume")),
+                "adjusted_close": safe_float(
+                    values.get("5. adjusted close"),
+                    safe_float(values.get("4. close")),
+                ),
+                "volume": safe_float(
+                    values.get("6. volume"),
+                    safe_float(values.get("5. volume")),
+                ),
             }
         )
 
@@ -536,6 +544,7 @@ def normalize_price_frame(
             "high": high_values,
             "low": low_values,
             "close": close,
+            "adjusted_close": close,
             "volume": volume_values,
         }
     )
@@ -1026,6 +1035,7 @@ def calculate_signal(
 ) -> Signal:
     close = frame["close"]
     volume = frame["volume"]
+    adjusted_close = frame["adjusted_close"] if "adjusted_close" in frame else close
 
     current = float(close.iloc[-1])
     ret_5d = safe_ratio(current, float(close.iloc[-6]), 1.0) - 1
@@ -1064,6 +1074,7 @@ def calculate_signal(
         negative_news_ratio=negative_ratio,
         news_count=news_count,
         atr_14_pct=atr_pct(frame),
+        adjusted_close=float(adjusted_close.iloc[-1]),
         asset_type=asset.asset_type if asset else "US_STOCK",
         name_zh=asset.name_zh if asset else "",
         name_en=asset.name_en if asset else "",
@@ -1699,7 +1710,7 @@ def build_prediction_snapshots(
                 "prediction_date": prediction_timestamp.date().isoformat(),
                 "prediction_timestamp_utc": prediction_timestamp.isoformat(),
                 "price_date": signal.price_as_of,
-                "adjusted_close": signal.close,
+                "adjusted_close": signal.adjusted_close or signal.close,
                 "sell_all_logit": logits["sell_all"],
                 "reduce_on_rebound_logit": logits["reduce_on_rebound"],
                 "keep_logit": logits["keep"],

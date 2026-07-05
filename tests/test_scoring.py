@@ -122,6 +122,35 @@ def test_empty_news_feed_uses_neutral_scores(monkeypatch):
     assert summary["MU"]["article_count"] == 0
 
 
+def test_fetch_daily_keeps_adjusted_close_separate(monkeypatch):
+    dates = pd.bdate_range(end="2026-07-02", periods=70)
+    payload = {
+        "Time Series (Daily)": {
+            date.strftime("%Y-%m-%d"): {
+                "1. open": "100",
+                "2. high": "101",
+                "3. low": "99",
+                "4. close": "100",
+                "5. adjusted close": "10",
+                "6. volume": "123456",
+            }
+            for date in dates
+        }
+    }
+
+    def fake_alpha_get(params, api_key):
+        assert params["function"] == "TIME_SERIES_DAILY_ADJUSTED"
+        return payload
+
+    monkeypatch.setattr(monitor, "alpha_get", fake_alpha_get)
+
+    frame = monitor.fetch_daily("MU", "dummy")
+
+    assert frame["close"].iloc[-1] == 100.0
+    assert frame["adjusted_close"].iloc[-1] == 10.0
+    assert frame["volume"].iloc[-1] == 123456.0
+
+
 def test_long_telegram_line_is_split():
     chunks = monitor.split_telegram_text("A" * 5000, limit=3900)
 
