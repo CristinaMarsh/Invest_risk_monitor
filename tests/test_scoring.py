@@ -139,7 +139,7 @@ def test_fetch_daily_keeps_adjusted_close_separate(monkeypatch):
     }
 
     def fake_alpha_get(params, api_key):
-        assert params["function"] == "TIME_SERIES_DAILY_ADJUSTED"
+        assert params["function"] == "TIME_SERIES_DAILY"
         return payload
 
     monkeypatch.setattr(monitor, "alpha_get", fake_alpha_get)
@@ -149,6 +149,27 @@ def test_fetch_daily_keeps_adjusted_close_separate(monkeypatch):
     assert frame["close"].iloc[-1] == 100.0
     assert frame["adjusted_close"].iloc[-1] == 10.0
     assert frame["volume"].iloc[-1] == 123456.0
+
+
+def test_fetch_daily_uses_close_when_adjusted_close_is_unavailable(monkeypatch):
+    dates = pd.bdate_range(end="2026-07-02", periods=70)
+    payload = {
+        "Time Series (Daily)": {
+            date.strftime("%Y-%m-%d"): {
+                "1. open": "100",
+                "2. high": "101",
+                "3. low": "99",
+                "4. close": "100",
+                "5. volume": "123456",
+            }
+            for date in dates
+        }
+    }
+    monkeypatch.setattr(monitor, "alpha_get", lambda params, api_key: payload)
+
+    frame = monitor.fetch_daily("MU", "dummy")
+
+    assert frame["adjusted_close"].iloc[-1] == frame["close"].iloc[-1]
 
 
 def test_long_telegram_line_is_split():

@@ -443,7 +443,7 @@ def alpha_get(params: dict[str, Any], api_key: str) -> dict[str, Any]:
 def fetch_daily(ticker: str, api_key: str) -> pd.DataFrame:
     data = alpha_get(
         {
-            "function": "TIME_SERIES_DAILY_ADJUSTED",
+            "function": "TIME_SERIES_DAILY",
             "symbol": ticker,
             "outputsize": "compact",
         },
